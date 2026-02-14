@@ -100,11 +100,22 @@ export async function GET(request: Request) {
         items_count: (order.NumberOfItemsUnshipped || 0) + (order.NumberOfItemsShipped || 0),
         buyer_email: order.BuyerInfo?.BuyerEmail || null,
         order_date: order.PurchaseDate,
+        purchase_date: order.PurchaseDate,
         channel: "Amazon",
         raw_data: order,
       }, { onConflict: "user_id,amazon_order_id" })
     )
     await Promise.allSettled(upsertPromises)
+
+    // After sync, read back from Supabase (normalized format)
+    const { data: dbOrders } = await supabase
+      .from("orders")
+      .select("*")
+      .eq("user_id", user.id)
+      .order("order_date", { ascending: false })
+    if (dbOrders) {
+      result.db_orders = dbOrders
+    }
   } else {
     result.errors.push(`Orders: ${ordersResult.reason?.message}`)
     result.orders = []

@@ -80,19 +80,10 @@ function DashboardContent() {
     try {
       const res = await fetch("/api/amazon/dashboard")
       const data = await res.json()
-      console.log("[v0] Amazon dashboard data:", JSON.stringify({
-        connected: data.connected,
-        order_count: data.order_count,
-        total_revenue: data.total_revenue,
-        orders_sample: (data.orders || []).slice(0, 2),
-        fba_total_units: data.fba_total_units,
-        fba_total_skus: data.fba_total_skus,
-        errors: data.errors,
-      }))
-
       if (data.connected) {
         setAmazonData(data)
-        setOrders(data.orders || [])
+        // Prefer db_orders (Supabase normalized) over raw SP-API orders
+        setOrders(data.db_orders || data.orders || [])
       } else if (data.error) {
         setSyncError(data.error)
       }
@@ -148,7 +139,7 @@ function DashboardContent() {
       )
       if (sorted.length === 0) return []
 
-      const firstDate = new Date(sorted[0].PurchaseDate)
+      const firstDate = new Date(sorted[0].PurchaseDate || sorted[0].purchase_date || sorted[0].order_date)
       const now = new Date()
       const buckets: Record<string, { revenue: number; orders: number }> = {}
 
