@@ -23,20 +23,13 @@ export async function GET(request: Request) {
     return NextResponse.redirect(`${baseUrl}/settings?error=app_id_not_configured`)
   }
 
-  // HARDCODED to exactly match Amazon Developer Console registration
-  const redirectUri = "https://app.trysiml.com/dashboard/api/auth/amazon/callback"
+  // For draft apps, Amazon uses the redirect_uri registered in the Developer Console.
+  // We do NOT pass redirect_uri in the URL -- Amazon will use the one configured in the app.
+  // This avoids MD5101 errors from any mismatch.
+  const authUrl = new URL("https://sellercentral.amazon.com/apps/authorize/consent")
+  authUrl.searchParams.set("application_id", appId)
+  authUrl.searchParams.set("state", user.id)
+  authUrl.searchParams.set("version", "beta")
 
-  // Build the URL manually to avoid double-encoding of redirect_uri
-  // Amazon SP-API OAuth expects redirect_uri to be encoded exactly once
-  const params = new URLSearchParams()
-  params.set("application_id", appId)
-  params.set("state", user.id)
-  params.set("version", "beta")
-  
-  // Construct final URL with redirect_uri encoded exactly once using encodeURIComponent
-  const authUrl = `https://sellercentral.amazon.com/apps/authorize/consent?${params.toString()}&redirect_uri=${encodeURIComponent(redirectUri)}`
-
-  console.log("[v0] Final Amazon OAuth URL:", authUrl)
-
-  return NextResponse.redirect(authUrl)
+  return NextResponse.redirect(authUrl.toString())
 }
