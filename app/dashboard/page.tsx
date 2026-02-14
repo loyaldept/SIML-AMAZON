@@ -38,6 +38,7 @@ export default function DashboardPage() {
   const [chartType, setChartType] = useState<ChartType>("revenue")
   const [timeRange, setTimeRange] = useState<TimeRange>("7d")
   const [marketplace, setMarketplace] = useState<Marketplace>("all")
+  const [syncing, setSyncing] = useState(false)
 
   const reloadStats = async (supabase: any, userId: string) => {
     const { data: inv } = await supabase.from("inventory").select("quantity").eq("user_id", userId)
@@ -78,12 +79,12 @@ export default function DashboardPage() {
     // If Amazon is connected, trigger a live sync from SP-API (runs in background)
     const amazonConnected = ch?.some(c => c.channel === "Amazon" && c.status === "connected")
     if (amazonConnected) {
+      setSyncing(true)
       fetch("/api/amazon/dashboard").then(r => r.json()).then(amazonData => {
         if (amazonData.connected) {
-          // Re-load from Supabase after sync completes
           reloadStats(supabase, user.id)
         }
-      }).catch(() => {})
+      }).catch(() => {}).finally(() => setSyncing(false))
     }
 
     // Load initial data from Supabase
@@ -167,7 +168,10 @@ export default function DashboardPage() {
           </div>
 
           <div className="flex items-center gap-3">
-            <span className="text-xs text-stone-400 font-medium hidden sm:block">Last sync: just now</span>
+            <span className="text-xs text-stone-400 font-medium hidden sm:block flex items-center gap-1.5">
+              {syncing && <Loader2 className="w-3 h-3 animate-spin" />}
+              {syncing ? "Syncing Amazon data..." : "Last sync: just now"}
+            </span>
             <div className="h-4 w-px bg-stone-200 mx-1 hidden sm:block" />
             <Link href="/notifications" className="p-2 text-stone-400 hover:text-stone-700 hover:bg-stone-100 rounded-lg transition-colors relative">
               <Bell className="w-4 h-4" />
@@ -195,6 +199,11 @@ export default function DashboardPage() {
                     {ch}
                     {connected ? (
                       <span className="text-[10px] text-emerald-600 font-medium ml-1">Connected</span>
+                    ) : ch === "Amazon" ? (
+                      <a href="/api/amazon/auth" className="text-[10px] text-stone-500 font-medium ml-1 hover:text-stone-900 flex items-center gap-0.5">
+                        <Link2 className="w-2.5 h-2.5" />
+                        Connect
+                      </a>
                     ) : (
                       <Link href="/settings" className="text-[10px] text-stone-500 font-medium ml-1 hover:text-stone-900 flex items-center gap-0.5">
                         <Link2 className="w-2.5 h-2.5" />
