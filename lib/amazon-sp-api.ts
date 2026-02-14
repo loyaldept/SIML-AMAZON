@@ -222,18 +222,6 @@ export async function deleteListingsItem(accessToken: string, sellerId: string, 
   })
 }
 
-// --- Pricing API ---
-
-export async function getCompetitivePricing(accessToken: string, asin: string, marketplaceId: string) {
-  return callSpApi(accessToken, "/products/pricing/v0/competitivePrice", {
-    query: {
-      MarketplaceId: marketplaceId,
-      Asins: asin,
-      ItemType: "Asin",
-    },
-  })
-}
-
 export async function getItemOffers(accessToken: string, asin: string, marketplaceId: string) {
   return callSpApi(accessToken, `/products/pricing/v0/items/${asin}/offers`, {
     query: {
