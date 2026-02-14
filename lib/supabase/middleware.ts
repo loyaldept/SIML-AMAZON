@@ -47,6 +47,11 @@ export async function updateSession(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser()
 
+  // Allow Amazon OAuth callback through without auth check (it handles auth via state param)
+  if (request.nextUrl.pathname.includes('/api/auth/amazon/callback')) {
+    return supabaseResponse
+  }
+
   const protectedPaths = ['/dashboard', '/inventory', '/list', '/chat', '/settings', '/notifications', '/onboarding']
   const isProtected = protectedPaths.some(p => request.nextUrl.pathname.startsWith(p))
 

@@ -24,10 +24,9 @@ export async function GET(request: Request) {
   }
 
   // The redirect_uri MUST exactly match what is registered in the Amazon Developer Console.
-  // Use AMAZON_REDIRECT_URI env var, or fall back to constructed URL.
-  // Amazon registered path is /api/auth/amazon/callback (with /auth/)
+  // Amazon Developer Console has: https://app.trysiml.com/dashboard/api/auth/amazon/callback
   const redirectUri =
-    process.env.AMAZON_REDIRECT_URI || `${baseUrl}/api/auth/amazon/callback`
+    process.env.AMAZON_REDIRECT_URI || `${baseUrl}/dashboard/api/auth/amazon/callback`
 
   // Build the Amazon Seller Central OAuth consent URL
   // Docs: https://developer-docs.amazon.com/sp-api/docs/website-authorization-workflow
