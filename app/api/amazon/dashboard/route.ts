@@ -4,13 +4,13 @@ import {
   getAmazonToken,
   getSellerInfo,
   getOrders,
-  getFbaInventory,
-  getFinancialEventGroups,
+  getAllFbaInventory,
+  getOrderMetrics,
 } from "@/lib/amazon-sp-api"
 
-export const maxDuration = 30
+export const maxDuration = 45
 
-export async function GET() {
+export async function GET(request: Request) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
@@ -27,13 +27,12 @@ export async function GET() {
     return NextResponse.json({ connected: false })
   }
 
-  // Get a valid access token (auto-refreshes if expired)
   const accessToken = await getAmazonToken(user.id)
   if (!accessToken) {
     return NextResponse.json({ connected: false, error: "Could not get access token - may need to reconnect" })
   }
 
-  const marketplaceId = conn.marketplace_id || "ATVPDKIKX0DER" // default US
+  const marketplaceId = conn.marketplace_id || "ATVPDKIKX0DER"
   const marketplaceIds = [marketplaceId]
   const result: any = {
     connected: true,
@@ -43,14 +42,20 @@ export async function GET() {
     errors: [],
   }
 
-  // Run all SP-API calls in parallel for speed
-  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+  // Time periods for fetching
+  const now = new Date()
+  const ninetyDaysAgo = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000).toISOString()
+  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString()
 
-  const [sellerResult, ordersResult, inventoryResult, financesResult] = await Promise.allSettled([
+  // Build Sales API interval for last 90 days (covers 7d, 30d, and 90d views)
+  const salesInterval = `${ninetyDaysAgo}--${now.toISOString()}`
+
+  // Run all SP-API calls in parallel
+  const [sellerResult, ordersResult, inventoryResult, salesResult] = await Promise.allSettled([
     getSellerInfo(accessToken),
-    getOrders(accessToken, marketplaceIds, thirtyDaysAgo),
-    getFbaInventory(accessToken, marketplaceIds),
-    getFinancialEventGroups(accessToken),
+    getOrders(accessToken, marketplaceIds, ninetyDaysAgo),
+    getAllFbaInventory(accessToken, marketplaceIds),
+    getOrderMetrics(accessToken, marketplaceIds, salesInterval, "Day").catch(() => null),
   ])
 
   // 1. Seller participations
@@ -61,33 +66,36 @@ export async function GET() {
     result.participations = []
   }
 
-  // 2. Orders
+  // 2. Orders - parse all statuses
   if (ordersResult.status === "fulfilled") {
-    const orders = ordersResult.value?.payload?.Orders || []
-    result.orders = orders.slice(0, 50)
+    const ordersPayload = ordersResult.value?.payload || ordersResult.value || {}
+    const orders = ordersPayload?.Orders || ordersPayload?.orders || []
+    result.orders = orders
     result.order_count = orders.length
 
     let totalRevenue = 0
     let shippedCount = 0
     let pendingCount = 0
+    let canceledCount = 0
     for (const order of orders) {
-      if (order.OrderTotal?.Amount) {
-        totalRevenue += parseFloat(order.OrderTotal.Amount)
-      }
+      const amount = parseFloat(order.OrderTotal?.Amount || "0")
+      if (amount > 0) totalRevenue += amount
       if (order.OrderStatus === "Shipped") shippedCount++
       if (order.OrderStatus === "Unshipped" || order.OrderStatus === "PartiallyShipped") pendingCount++
+      if (order.OrderStatus === "Canceled") canceledCount++
     }
     result.total_revenue = totalRevenue
     result.shipped_orders = shippedCount
     result.pending_orders = pendingCount
+    result.canceled_orders = canceledCount
 
-    // Sync orders to Supabase in background (don't await each one)
-    const upsertPromises = orders.slice(0, 50).map((order: any) =>
+    // Sync ALL orders to Supabase (not just 50)
+    const upsertPromises = orders.map((order: any) =>
       supabase.from("orders").upsert({
         user_id: user.id,
         amazon_order_id: order.AmazonOrderId,
         status: order.OrderStatus,
-        total_amount: order.OrderTotal?.Amount ? parseFloat(order.OrderTotal.Amount) : 0,
+        total_amount: parseFloat(order.OrderTotal?.Amount || "0"),
         currency: order.OrderTotal?.CurrencyCode || "USD",
         items_count: (order.NumberOfItemsUnshipped || 0) + (order.NumberOfItemsShipped || 0),
         buyer_email: order.BuyerInfo?.BuyerEmail || null,
@@ -106,14 +114,34 @@ export async function GET() {
     result.pending_orders = 0
   }
 
-  // 3. FBA Inventory
+  // 3. FBA Inventory (all pages)
   if (inventoryResult.status === "fulfilled") {
-    const payload = inventoryResult.value?.payload || inventoryResult.value || {}
-    const summaries = payload.inventorySummaries || []
-    result.fba_inventory = summaries.slice(0, 100)
-    result.fba_total_units = summaries.reduce((sum: number, s: any) =>
-      sum + (s.totalQuantity || 0), 0)
+    const summaries = inventoryResult.value || []
+    result.fba_inventory = summaries
+    result.fba_total_units = summaries.reduce((sum: number, s: any) => {
+      const qty = s.inventoryDetails?.fulfillableQuantity
+        || s.totalQuantity
+        || s.inventoryDetails?.totalQuantity
+        || 0
+      return sum + qty
+    }, 0)
     result.fba_total_skus = summaries.length
+
+    // Sync FBA inventory to Supabase inventory table
+    const invUpserts = summaries.map((item: any) =>
+      supabase.from("inventory").upsert({
+        user_id: user.id,
+        asin: item.asin,
+        sku: item.sellerSku,
+        title: item.productName || item.sellerSku || item.asin,
+        quantity: item.inventoryDetails?.fulfillableQuantity || item.totalQuantity || 0,
+        channel: "FBA",
+        status: (item.inventoryDetails?.fulfillableQuantity || item.totalQuantity || 0) > 0 ? "active" : "out_of_stock",
+        fulfillment_channel: item.inventoryDetails ? "FBA" : "FBM",
+        fnsku: item.fnSku || null,
+      }, { onConflict: "user_id,asin" })
+    )
+    await Promise.allSettled(invUpserts)
   } else {
     result.errors.push(`FBA Inventory: ${inventoryResult.reason?.message}`)
     result.fba_inventory = []
@@ -121,12 +149,16 @@ export async function GET() {
     result.fba_total_skus = 0
   }
 
-  // 4. Financial event groups
-  if (financesResult.status === "fulfilled") {
-    result.financial_groups = financesResult.value?.payload?.FinancialEventGroupList || []
+  // 4. Sales metrics (daily breakdown for charts)
+  if (salesResult.status === "fulfilled" && salesResult.value) {
+    const payload = salesResult.value?.payload || salesResult.value || []
+    result.sales_metrics = payload
   } else {
-    result.errors.push(`Finances: ${financesResult.reason?.message}`)
-    result.financial_groups = []
+    // Fall back: we'll build chart data from orders on the client side
+    result.sales_metrics = null
+    if (salesResult.status === "rejected") {
+      result.errors.push(`Sales API: ${salesResult.reason?.message}`)
+    }
   }
 
   return NextResponse.json(result)
