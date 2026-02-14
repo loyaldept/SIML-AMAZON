@@ -37,8 +37,10 @@ export async function GET(request: Request) {
   // version=beta is required for draft/unlisted apps
   authUrl.searchParams.set("version", "beta")
 
-  console.log("[v0] Amazon OAuth redirect URL:", authUrl.toString())
-  console.log("[v0] redirect_uri sent:", redirectUri)
+  console.log("[v0] Amazon OAuth - redirect_uri being sent:", redirectUri)
+  console.log("[v0] Amazon OAuth - AMAZON_REDIRECT_URI env:", process.env.AMAZON_REDIRECT_URI)
+  console.log("[v0] Amazon OAuth - baseUrl:", baseUrl)
+  console.log("[v0] Amazon OAuth - full auth URL:", authUrl.toString())
 
   return NextResponse.redirect(authUrl.toString())
 }
