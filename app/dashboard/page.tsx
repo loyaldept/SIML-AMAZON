@@ -80,11 +80,10 @@ function DashboardContent() {
     try {
       const res = await fetch("/api/amazon/dashboard")
       const data = await res.json()
-      console.log("[v0] Amazon dashboard data:", JSON.stringify(data).slice(0, 500))
-
       if (data.connected) {
         setAmazonData(data)
-        setOrders(data.orders || [])
+        // Prefer db_orders (Supabase normalized) over raw SP-API orders
+        setOrders(data.db_orders || data.orders || [])
       } else if (data.error) {
         setSyncError(data.error)
       }
@@ -100,22 +99,34 @@ function DashboardContent() {
     const days = timeRange === "7d" ? 7 : timeRange === "30d" ? 30 : 90
     const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000)
     return orders.filter((o: any) => {
-      if (!o.PurchaseDate) return false
-      return new Date(o.PurchaseDate) >= cutoff
+      const date = o.PurchaseDate || o.purchase_date || o.order_date
+      if (!date) return false
+      return new Date(date) >= cutoff
     })
   }
 
   const filteredOrders = getFilteredOrders()
 
-  // Calculate real stats from filtered orders
+  // Calculate stats from filtered orders - handle both SP-API format and Supabase format
   const totalRevenue = filteredOrders.reduce((sum: number, o: any) => {
-    return sum + parseFloat(o.OrderTotal?.Amount || "0")
+    const amount = parseFloat(o.OrderTotal?.Amount || o.total_amount || o.order_total || "0")
+    return sum + (isNaN(amount) ? 0 : amount)
   }, 0)
   const totalOrders = filteredOrders.length
-  const shippedOrders = filteredOrders.filter((o: any) => o.OrderStatus === "Shipped").length
-  const pendingOrders = filteredOrders.filter((o: any) => o.OrderStatus === "Unshipped" || o.OrderStatus === "PartiallyShipped").length
+  const shippedOrders = filteredOrders.filter((o: any) => {
+    const status = o.OrderStatus || o.status
+    return status === "Shipped"
+  }).length
+  const pendingOrders = filteredOrders.filter((o: any) => {
+    const status = o.OrderStatus || o.status
+    return status === "Unshipped" || status === "PartiallyShipped" || status === "Pending"
+  }).length
   const totalInventory = amazonData?.fba_total_units || 0
   const totalSkus = amazonData?.fba_total_skus || 0
+
+  // If filtered stats are 0 but API has pre-calculated totals for "all" view, use those
+  const displayRevenue = totalRevenue > 0 ? totalRevenue : (timeRange === "all" || timeRange === "90d" ? (amazonData?.total_revenue || 0) : totalRevenue)
+  const displayOrders = totalOrders > 0 ? totalOrders : (timeRange === "all" || timeRange === "90d" ? (amazonData?.order_count || 0) : totalOrders)
 
   const timeRangeLabel = timeRange === "7d" ? "7 days" : timeRange === "30d" ? "30 days" : timeRange === "90d" ? "90 days" : "all time"
 
@@ -123,12 +134,12 @@ function DashboardContent() {
   const getChartData = () => {
     if (timeRange === "all" && orders.length > 0) {
       // For "all time", find the earliest order and show monthly buckets
-      const sorted = [...orders].filter((o: any) => o.PurchaseDate).sort((a: any, b: any) =>
-        new Date(a.PurchaseDate).getTime() - new Date(b.PurchaseDate).getTime()
+      const sorted = [...orders].filter((o: any) => o.PurchaseDate || o.purchase_date || o.order_date).sort((a: any, b: any) =>
+        new Date(a.PurchaseDate || a.purchase_date || a.order_date).getTime() - new Date(b.PurchaseDate || b.purchase_date || b.order_date).getTime()
       )
       if (sorted.length === 0) return []
 
-      const firstDate = new Date(sorted[0].PurchaseDate)
+      const firstDate = new Date(sorted[0].PurchaseDate || sorted[0].purchase_date || sorted[0].order_date)
       const now = new Date()
       const buckets: Record<string, { revenue: number; orders: number }> = {}
 
@@ -141,12 +152,14 @@ function DashboardContent() {
       }
 
       for (const order of orders) {
-        if (!order.PurchaseDate) continue
-        const d = new Date(order.PurchaseDate)
+        const dateStr = order.PurchaseDate || order.purchase_date || order.order_date
+        if (!dateStr) continue
+        const d = new Date(dateStr)
         const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`
         if (buckets[key]) {
           buckets[key].orders++
-          if (order.OrderTotal?.Amount) buckets[key].revenue += parseFloat(order.OrderTotal.Amount)
+          const amt = parseFloat(order.OrderTotal?.Amount || order.total_amount || order.order_total || "0")
+          if (!isNaN(amt)) buckets[key].revenue += amt
         }
       }
 
@@ -172,13 +185,13 @@ function DashboardContent() {
     }
 
     for (const order of orders) {
-      if (!order.PurchaseDate) continue
-      const orderDate = new Date(order.PurchaseDate).toISOString().slice(0, 10)
+      const dateStr = order.PurchaseDate || order.purchase_date || order.order_date
+      if (!dateStr) continue
+      const orderDate = new Date(dateStr).toISOString().slice(0, 10)
       if (buckets[orderDate]) {
         buckets[orderDate].orders++
-        if (order.OrderTotal?.Amount) {
-          buckets[orderDate].revenue += parseFloat(order.OrderTotal.Amount)
-        }
+        const amt = parseFloat(order.OrderTotal?.Amount || order.total_amount || order.order_total || "0")
+        if (!isNaN(amt)) buckets[orderDate].revenue += amt
       }
     }
 
@@ -321,7 +334,7 @@ function DashboardContent() {
                     </div>
                     {syncing && <Loader2 className="w-3 h-3 animate-spin text-stone-400" />}
                   </div>
-                  <div className="text-2xl font-semibold text-stone-900 font-serif">${totalRevenue.toFixed(2)}</div>
+                  <div className="text-2xl font-semibold text-stone-900 font-serif">${displayRevenue.toFixed(2)}</div>
                   <div className="text-xs text-stone-500 mt-1">Revenue ({timeRangeLabel})</div>
                 </div>
 
@@ -336,7 +349,7 @@ function DashboardContent() {
                       )}
                     </div>
                   </div>
-                  <div className="text-2xl font-semibold text-stone-900 font-serif">{totalOrders}</div>
+                  <div className="text-2xl font-semibold text-stone-900 font-serif">{displayOrders}</div>
                   <div className="text-xs text-stone-500 mt-1">Orders ({timeRangeLabel}) &middot; {shippedOrders} shipped</div>
                 </div>
 

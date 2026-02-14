@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
-import { getAmazonToken, getAllFbaInventory } from "@/lib/amazon-sp-api"
+import { getAmazonToken, getAllFbaInventory, getMyPrice, getCatalogItem } from "@/lib/amazon-sp-api"
 
-export const maxDuration = 30
+export const maxDuration = 60
 
 export async function GET() {
   const supabase = await createClient()
@@ -21,31 +21,109 @@ export async function GET() {
       .single()
 
     const marketplaceId = conn?.marketplace_id || "ATVPDKIKX0DER"
+
+    // 1. Get all FBA inventory summaries
     const summaries = await getAllFbaInventory(token, [marketplaceId])
 
-    // Sync FBA inventory to our inventory table
+    // 2. Get prices for all ASINs (batch in groups of 20)
+    const allAsins = [...new Set(summaries.map((s: any) => s.asin).filter(Boolean))]
+    const priceMap: Record<string, { price: number; currency: string }> = {}
+    const imageMap: Record<string, string> = {}
+
+    // Fetch prices in batches of 20 (API limit)
+    for (let i = 0; i < allAsins.length; i += 20) {
+      const batch = allAsins.slice(i, i + 20)
+      try {
+        const priceData: any = await getMyPrice(token, marketplaceId, batch)
+        const prices = priceData?.payload || priceData || []
+        if (Array.isArray(prices)) {
+          for (const p of prices) {
+            const asin = p.ASIN || p.asin
+            // Get the lowest offer price or the listing price
+            const offers = p.Product?.Offers || []
+            const buyingPrice = p.Product?.Offers?.[0]?.BuyingPrice?.ListingPrice
+            const listingPrice = p.Product?.Offers?.[0]?.ListingPrice
+            const regularPrice = p.Product?.Offers?.[0]?.RegularPrice
+            const price = buyingPrice || listingPrice || regularPrice
+            if (asin && price) {
+              priceMap[asin] = {
+                price: parseFloat(price.Amount || "0"),
+                currency: price.CurrencyCode || "USD",
+              }
+            }
+          }
+        }
+      } catch (e: any) {
+        console.log("[v0] Price fetch batch error:", e?.message)
+      }
+    }
+
+    // 3. Get images for up to 50 ASINs via Catalog API
+    for (let i = 0; i < Math.min(allAsins.length, 50); i++) {
+      try {
+        const catalogData: any = await getCatalogItem(token, allAsins[i], [marketplaceId])
+        const images = catalogData?.images?.[0]?.images || []
+        if (images.length > 0) {
+          imageMap[allAsins[i]] = images[0].link || ""
+        }
+      } catch {
+        // Skip image fetch errors silently
+      }
+    }
+
+    // 4. Sync to inventory table with prices and images
+    const results = []
     for (const item of summaries) {
+      const asin = item.asin
       const qty = item.inventoryDetails?.fulfillableQuantity || item.totalQuantity || 0
-      await supabase.from("inventory").upsert({
+      const priceInfo = priceMap[asin]
+      const image = imageMap[asin]
+
+      const upsertData: any = {
         user_id: user.id,
         asin: item.asin,
-        sku: item.sellerSku,
+        sku: item.sellerSku || item.asin,
         title: item.productName || item.sellerSku || item.asin,
         quantity: qty,
         channel: "FBA",
         status: qty > 0 ? "active" : "out_of_stock",
-        fulfillment_channel: item.inventoryDetails ? "FBA" : "FBM",
+        fulfillment_channel: "FBA",
         fnsku: item.fnSku || null,
-      }, { onConflict: "user_id,asin" })
+        updated_at: new Date().toISOString(),
+      }
+
+      // Only set price if we got one from the API
+      if (priceInfo) {
+        upsertData.price = priceInfo.price
+      }
+
+      // Only set image if we got one
+      if (image) {
+        upsertData.image_url = image
+      }
+
+      await supabase.from("inventory").upsert(upsertData, { onConflict: "user_id,asin" })
+
+      results.push({
+        asin: item.asin,
+        sku: item.sellerSku,
+        title: item.productName,
+        quantity: qty,
+        price: priceInfo?.price || null,
+        image: image || null,
+        fnsku: item.fnSku,
+      })
     }
 
     return NextResponse.json({
-      inventorySummaries: summaries,
-      totalSkus: summaries.length,
-      totalUnits: summaries.reduce((sum: number, s: any) =>
-        sum + (s.inventoryDetails?.fulfillableQuantity || s.totalQuantity || 0), 0),
+      inventorySummaries: results,
+      totalSkus: results.length,
+      totalUnits: results.reduce((sum: number, s: any) => sum + (s.quantity || 0), 0),
+      pricesFound: Object.keys(priceMap).length,
+      imagesFound: Object.keys(imageMap).length,
     })
   } catch (error: any) {
+    console.error("[v0] Inventory API error:", error?.message)
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 }

@@ -5,6 +5,7 @@ import {
   UIMessage,
   stepCountIs,
 } from "ai"
+import { openai } from "@ai-sdk/openai"
 import { createClient } from "@/lib/supabase/server"
 import { z } from "zod"
 
@@ -266,11 +267,12 @@ const tools = {
 }
 
 export async function POST(req: Request) {
+  try {
   const body = await req.json()
   const messages: UIMessage[] = body.messages
 
   const result = streamText({
-    model: "openai/gpt-4o-mini",
+    model: openai("gpt-4o-mini"),
     system: `You are Siml AI, an intelligent e-commerce assistant built into the Siml multi-channel listing platform. You help Amazon, eBay, and Shopify sellers manage their business.
 
 You have access to tools that look up REAL inventory, orders, listings, financial data, and channel connection status from the user's actual accounts.
@@ -295,4 +297,11 @@ RULES:
   })
 
   return result.toUIMessageStreamResponse()
+  } catch (error: any) {
+    console.error("[v0] Chat API error:", error?.message || error)
+    return new Response(JSON.stringify({ error: error?.message || "Chat failed" }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+    })
+  }
 }

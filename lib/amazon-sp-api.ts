@@ -167,6 +167,29 @@ export async function getCatalogItem(accessToken: string, asin: string, marketpl
   })
 }
 
+// --- Product Pricing API ---
+
+export async function getMyPrice(accessToken: string, marketplaceId: string, asins: string[]) {
+  // Max 20 ASINs per request
+  return callSpApi(accessToken, "/products/pricing/v0/price", {
+    query: {
+      MarketplaceId: marketplaceId,
+      ItemType: "Asin",
+      Asins: asins.join(","),
+    },
+  })
+}
+
+export async function getCompetitivePricing(accessToken: string, marketplaceId: string, asins: string[]) {
+  return callSpApi(accessToken, "/products/pricing/v0/competitivePrice", {
+    query: {
+      MarketplaceId: marketplaceId,
+      ItemType: "Asin",
+      Asins: asins.join(","),
+    },
+  })
+}
+
 // --- Listings API ---
 
 export async function getListingsItem(accessToken: string, sellerId: string, sku: string, marketplaceIds: string[]) {
