@@ -5,6 +5,7 @@ import {
   UIMessage,
   stepCountIs,
 } from "ai"
+import { openai } from "@ai-sdk/openai"
 import { createClient } from "@/lib/supabase/server"
 import { z } from "zod"
 
@@ -270,7 +271,7 @@ export async function POST(req: Request) {
   const messages: UIMessage[] = body.messages
 
   const result = streamText({
-    model: "openai/gpt-4o-mini",
+    model: openai("gpt-4o-mini"),
     system: `You are Siml AI, an intelligent e-commerce assistant built into the Siml multi-channel listing platform. You help Amazon, eBay, and Shopify sellers manage their business.
 
 You have access to tools that look up REAL inventory, orders, listings, financial data, and channel connection status from the user's actual accounts.
