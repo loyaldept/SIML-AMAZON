@@ -26,13 +26,17 @@ export async function GET(request: Request) {
   // HARDCODED to exactly match Amazon Developer Console registration
   const redirectUri = "https://app.trysiml.com/dashboard/api/auth/amazon/callback"
 
-  // Build the Amazon Seller Central OAuth consent URL
-  // Docs: https://developer-docs.amazon.com/sp-api/docs/website-authorization-workflow
-  const authUrl = new URL("https://sellercentral.amazon.com/apps/authorize/consent")
-  authUrl.searchParams.set("application_id", appId)
-  authUrl.searchParams.set("state", user.id)
-  authUrl.searchParams.set("redirect_uri", redirectUri)
-  authUrl.searchParams.set("version", "beta")
+  // Build the URL manually to avoid double-encoding of redirect_uri
+  // Amazon SP-API OAuth expects redirect_uri to be encoded exactly once
+  const params = new URLSearchParams()
+  params.set("application_id", appId)
+  params.set("state", user.id)
+  params.set("version", "beta")
+  
+  // Construct final URL with redirect_uri encoded exactly once using encodeURIComponent
+  const authUrl = `https://sellercentral.amazon.com/apps/authorize/consent?${params.toString()}&redirect_uri=${encodeURIComponent(redirectUri)}`
 
-  return NextResponse.redirect(authUrl.toString())
+  console.log("[v0] Final Amazon OAuth URL:", authUrl)
+
+  return NextResponse.redirect(authUrl)
 }
