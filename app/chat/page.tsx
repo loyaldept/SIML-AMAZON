@@ -56,14 +56,14 @@ export default function ChatPage() {
     "How do I connect my Amazon Seller Account?",
   ]
 
-  const getMessageText = (msg: any): string => {
-    if (msg.parts && Array.isArray(msg.parts)) {
-      return msg.parts
-        .filter((p: any) => p.type === "text")
-        .map((p: any) => p.text)
-        .join("")
+  const getMessageParts = (msg: any) => {
+    if (!msg.parts || !Array.isArray(msg.parts)) {
+      return { text: msg.content || "", hasToolCalls: false, toolResults: [] }
     }
-    return msg.content || ""
+    const textParts = msg.parts.filter((p: any) => p.type === "text").map((p: any) => p.text).join("")
+    const toolCalls = msg.parts.filter((p: any) => p.type === "tool-invocation")
+    const hasToolCalls = toolCalls.length > 0
+    return { text: textParts, hasToolCalls, toolCalls }
   }
 
   return (
@@ -117,7 +117,10 @@ export default function ChatPage() {
               </div>
             ) : (
               messages.map((msg) => {
-                const text = getMessageText(msg)
+                const { text, hasToolCalls, toolCalls } = getMessageParts(msg)
+                // Skip empty assistant messages (intermediate tool-call-only messages)
+                if (msg.role === "assistant" && !text && !hasToolCalls) return null
+
                 return (
                   <div
                     key={msg.id}
@@ -137,21 +140,53 @@ export default function ChatPage() {
                           <span className="text-xs font-medium text-stone-500">Siml AI</span>
                         </div>
                       )}
-                      <p className="text-sm leading-relaxed whitespace-pre-wrap">{text}</p>
+                      {/* Show tool call indicators */}
+                      {hasToolCalls && toolCalls.map((tc: any, i: number) => {
+                        const inv = tc.toolInvocation || tc
+                        const toolName = inv.toolName || "tool"
+                        const state = inv.state || "call"
+                        const friendlyNames: Record<string, string> = {
+                          searchInventory: "Searching inventory",
+                          getInventorySummary: "Getting inventory summary",
+                          getOrders: "Looking up orders",
+                          getListings: "Checking listings",
+                          getChannelStatus: "Checking channel status",
+                          getFinancialSummary: "Getting financial data",
+                        }
+                        if (state === "result" && text) return null // Don't show if we have text
+                        return (
+                          <div key={i} className="flex items-center gap-2 py-1 text-xs text-stone-500">
+                            {state !== "result" ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : (
+                              <span className="w-3 h-3 rounded-full bg-emerald-500 inline-block" />
+                            )}
+                            <span>{friendlyNames[toolName] || toolName}...</span>
+                          </div>
+                        )
+                      })}
+                      {text && <p className="text-sm leading-relaxed whitespace-pre-wrap">{text}</p>}
                     </div>
                   </div>
                 )
               })
             )}
 
-            {isLoading && messages.length > 0 && messages[messages.length - 1]?.role === "user" && (
-              <div className="flex justify-start">
-                <div className="bg-white border border-stone-200 rounded-2xl px-4 py-3 flex items-center gap-2">
-                  <Loader2 className="w-4 h-4 animate-spin text-stone-400" />
-                  <span className="text-sm text-stone-500">Thinking...</span>
+            {isLoading && messages.length > 0 && (() => {
+              const lastMsg = messages[messages.length - 1]
+              // Only show "Thinking" if the last message is from the user (AI hasn't started yet)
+              // OR if the last assistant message has no content and no tool calls
+              const showThinking = lastMsg?.role === "user" ||
+                (lastMsg?.role === "assistant" && !getMessageParts(lastMsg).text && !getMessageParts(lastMsg).hasToolCalls)
+              return showThinking ? (
+                <div className="flex justify-start">
+                  <div className="bg-white border border-stone-200 rounded-2xl px-4 py-3 flex items-center gap-2">
+                    <Loader2 className="w-4 h-4 animate-spin text-stone-400" />
+                    <span className="text-sm text-stone-500">Thinking...</span>
+                  </div>
                 </div>
-              </div>
-            )}
+              ) : null
+            })()}
             <div ref={messagesEndRef} />
           </div>
         </div>

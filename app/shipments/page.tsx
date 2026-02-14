@@ -51,12 +51,25 @@ export default function ShipmentsPage() {
     const { data: conn } = await supabase
       .from("channel_connections").select("status")
       .eq("user_id", user.id).eq("channel", "Amazon").single()
-    setAmazonConnected(conn?.status === "connected")
 
+    const connected = conn?.status === "connected"
+    setAmazonConnected(connected)
+
+    if (connected) {
+      // Always sync fresh orders from Amazon when loading shipments
+      try {
+        const res = await fetch("/api/amazon/orders?days=90")
+        if (!res.ok) throw new Error("Sync failed")
+      } catch (e) {
+        console.log("[v0] Auto-sync error:", e)
+      }
+    }
+
+    // Now load from Supabase (freshly synced)
     const { data } = await supabase
       .from("orders").select("*")
       .eq("user_id", user.id)
-      .order("order_date", { ascending: false }).limit(50)
+      .order("order_date", { ascending: false })
     if (data) setOrders(data)
     setLoading(false)
   }
@@ -64,8 +77,17 @@ export default function ShipmentsPage() {
   const handleSyncOrders = async () => {
     setSyncing(true)
     try {
-      const res = await fetch("/api/amazon/orders?days=30")
-      if (res.ok) await loadData()
+      const res = await fetch("/api/amazon/orders?days=90")
+      if (res.ok) {
+        const supabase = createClient()
+        const { data: { user } } = await supabase.auth.getUser()
+        if (user) {
+          const { data } = await supabase.from("orders").select("*")
+            .eq("user_id", user.id)
+            .order("order_date", { ascending: false })
+          if (data) setOrders(data)
+        }
+      }
     } catch (e) { console.log("[v0] Sync error:", e) }
     setSyncing(false)
   }

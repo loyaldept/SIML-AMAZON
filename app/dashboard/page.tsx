@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils"
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts"
 
 type ChartType = "revenue" | "orders"
-type TimeRange = "7d" | "30d" | "90d"
+type TimeRange = "7d" | "30d" | "90d" | "all"
 
 export default function DashboardPage() {
   return (
@@ -94,21 +94,76 @@ function DashboardContent() {
     setSyncing(false)
   }
 
-  // Calculate real stats from Amazon SP-API data
-  const totalRevenue = amazonData?.total_revenue || 0
-  const totalOrders = amazonData?.order_count || 0
-  const shippedOrders = amazonData?.shipped_orders || 0
-  const pendingOrders = amazonData?.pending_orders || 0
+  // Filter orders by selected time range
+  const getFilteredOrders = () => {
+    if (timeRange === "all") return orders
+    const days = timeRange === "7d" ? 7 : timeRange === "30d" ? 30 : 90
+    const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000)
+    return orders.filter((o: any) => {
+      if (!o.PurchaseDate) return false
+      return new Date(o.PurchaseDate) >= cutoff
+    })
+  }
+
+  const filteredOrders = getFilteredOrders()
+
+  // Calculate real stats from filtered orders
+  const totalRevenue = filteredOrders.reduce((sum: number, o: any) => {
+    return sum + parseFloat(o.OrderTotal?.Amount || "0")
+  }, 0)
+  const totalOrders = filteredOrders.length
+  const shippedOrders = filteredOrders.filter((o: any) => o.OrderStatus === "Shipped").length
+  const pendingOrders = filteredOrders.filter((o: any) => o.OrderStatus === "Unshipped" || o.OrderStatus === "PartiallyShipped").length
   const totalInventory = amazonData?.fba_total_units || 0
   const totalSkus = amazonData?.fba_total_skus || 0
 
+  const timeRangeLabel = timeRange === "7d" ? "7 days" : timeRange === "30d" ? "30 days" : timeRange === "90d" ? "90 days" : "all time"
+
   // Build chart data from REAL orders
   const getChartData = () => {
+    if (timeRange === "all" && orders.length > 0) {
+      // For "all time", find the earliest order and show monthly buckets
+      const sorted = [...orders].filter((o: any) => o.PurchaseDate).sort((a: any, b: any) =>
+        new Date(a.PurchaseDate).getTime() - new Date(b.PurchaseDate).getTime()
+      )
+      if (sorted.length === 0) return []
+
+      const firstDate = new Date(sorted[0].PurchaseDate)
+      const now = new Date()
+      const buckets: Record<string, { revenue: number; orders: number }> = {}
+
+      // Monthly buckets for all time
+      const current = new Date(firstDate.getFullYear(), firstDate.getMonth(), 1)
+      while (current <= now) {
+        const key = `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, "0")}`
+        buckets[key] = { revenue: 0, orders: 0 }
+        current.setMonth(current.getMonth() + 1)
+      }
+
+      for (const order of orders) {
+        if (!order.PurchaseDate) continue
+        const d = new Date(order.PurchaseDate)
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`
+        if (buckets[key]) {
+          buckets[key].orders++
+          if (order.OrderTotal?.Amount) buckets[key].revenue += parseFloat(order.OrderTotal.Amount)
+        }
+      }
+
+      return Object.entries(buckets).map(([key, data]) => {
+        const [y, m] = key.split("-")
+        return {
+          date: new Date(parseInt(y), parseInt(m) - 1).toLocaleDateString("en-US", { month: "short", year: "2-digit" }),
+          revenue: Math.round(data.revenue * 100) / 100,
+          orders: data.orders,
+        }
+      })
+    }
+
     const days = timeRange === "7d" ? 7 : timeRange === "30d" ? 30 : 90
     const now = new Date()
     const buckets: Record<string, { revenue: number; orders: number }> = {}
 
-    // Initialize all days
     for (let i = days - 1; i >= 0; i--) {
       const d = new Date(now)
       d.setDate(d.getDate() - i)
@@ -116,7 +171,6 @@ function DashboardContent() {
       buckets[key] = { revenue: 0, orders: 0 }
     }
 
-    // Fill with real order data
     for (const order of orders) {
       if (!order.PurchaseDate) continue
       const orderDate = new Date(order.PurchaseDate).toISOString().slice(0, 10)
@@ -268,7 +322,7 @@ function DashboardContent() {
                     {syncing && <Loader2 className="w-3 h-3 animate-spin text-stone-400" />}
                   </div>
                   <div className="text-2xl font-semibold text-stone-900 font-serif">${totalRevenue.toFixed(2)}</div>
-                  <div className="text-xs text-stone-500 mt-1">Revenue (30 days)</div>
+                  <div className="text-xs text-stone-500 mt-1">Revenue ({timeRangeLabel})</div>
                 </div>
 
                 <div className="bg-white rounded-xl border border-stone-200 p-4 hover:border-stone-300 transition-all">
@@ -283,7 +337,7 @@ function DashboardContent() {
                     </div>
                   </div>
                   <div className="text-2xl font-semibold text-stone-900 font-serif">{totalOrders}</div>
-                  <div className="text-xs text-stone-500 mt-1">Orders (30 days) &middot; {shippedOrders} shipped</div>
+                  <div className="text-xs text-stone-500 mt-1">Orders ({timeRangeLabel}) &middot; {shippedOrders} shipped</div>
                 </div>
 
                 <div className="bg-white rounded-xl border border-stone-200 p-4 hover:border-stone-300 transition-all">
@@ -340,6 +394,7 @@ function DashboardContent() {
                       <option value="7d">Last 7 days</option>
                       <option value="30d">Last 30 days</option>
                       <option value="90d">Last 90 days</option>
+                      <option value="all">All Time</option>
                     </select>
                   </div>
                 </div>

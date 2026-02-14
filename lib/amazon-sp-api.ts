@@ -133,7 +133,6 @@ export async function getOrders(accessToken: string, marketplaceIds: string[], c
     query: {
       MarketplaceIds: marketplaceIds.join(","),
       CreatedAfter: createdAfter || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
-      OrderStatuses: "Unshipped,PartiallyShipped,Shipped",
     },
   })
 }
@@ -225,12 +224,29 @@ export async function getItemOffers(accessToken: string, asin: string, marketpla
 
 export async function getFbaInventory(accessToken: string, marketplaceIds: string[], nextToken?: string) {
   const query: Record<string, string> = {
+    details: "true",
     granularityType: "Marketplace",
     granularityId: marketplaceIds[0],
     marketplaceIds: marketplaceIds.join(","),
   }
   if (nextToken) query.nextToken = nextToken
   return callSpApi(accessToken, "/fba/inventory/v1/summaries", { query })
+}
+
+// Get all inventory pages (handles pagination)
+export async function getAllFbaInventory(accessToken: string, marketplaceIds: string[]) {
+  const allSummaries: any[] = []
+  let nextToken: string | undefined = undefined
+
+  do {
+    const response: any = await getFbaInventory(accessToken, marketplaceIds, nextToken)
+    const payload = response?.payload || response || {}
+    const summaries = payload?.inventorySummaries || []
+    allSummaries.push(...summaries)
+    nextToken = payload?.nextToken || response?.pagination?.nextToken
+  } while (nextToken && allSummaries.length < 500) // Safety limit
+
+  return allSummaries
 }
 
 // --- Finances API ---
@@ -245,6 +261,23 @@ export async function getFinancialEventGroups(accessToken: string, postedAfter?:
 
 export async function getFinancialEvents(accessToken: string, orderId: string) {
   return callSpApi(accessToken, `/finances/v0/orders/${orderId}/financialEvents`)
+}
+
+// --- Sales API ---
+
+export async function getOrderMetrics(
+  accessToken: string,
+  marketplaceIds: string[],
+  interval: string, // ISO 8601 interval e.g. "2025-01-01T00:00:00Z--2025-02-01T00:00:00Z"
+  granularity: "Hour" | "Day" | "Week" | "Month" | "Year" | "Total" = "Day"
+) {
+  return callSpApi(accessToken, "/sales/v1/orderMetrics", {
+    query: {
+      marketplaceIds: marketplaceIds.join(","),
+      interval,
+      granularity,
+    },
+  })
 }
 
 // --- Messaging API (Buyer Communication) ---
