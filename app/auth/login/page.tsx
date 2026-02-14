@@ -24,7 +24,18 @@ export default function LoginPage() {
       setError(error.message)
       setLoading(false)
     } else {
-      router.push("/dashboard")
+      // Check if user has completed onboarding
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user) {
+        const { data: profile } = await supabase.from("profiles").select("onboarding_complete").eq("id", user.id).single()
+        if (profile?.onboarding_complete) {
+          router.push("/dashboard")
+        } else {
+          router.push("/onboarding")
+        }
+      } else {
+        router.push("/onboarding")
+      }
     }
   }
 
