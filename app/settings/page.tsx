@@ -105,8 +105,21 @@ function SettingsContent() {
     setConnecting(channel)
 
     if (channel === "Amazon") {
-      // Redirect to Amazon OAuth flow
-      window.location.href = "/api/amazon/auth"
+      try {
+        const res = await fetch("/api/amazon/connect", { method: "POST" })
+        const data = await res.json()
+        if (data.success) {
+          const supabase = createClient()
+          const { data: { user } } = await supabase.auth.getUser()
+          if (user) {
+            const { data: ch } = await supabase.from("channel_connections").select("*").eq("user_id", user.id)
+            if (ch) setChannels(ch)
+          }
+        }
+      } catch (e) {
+        console.log("[v0] Connect error:", e)
+      }
+      setConnecting("")
       return
     }
 

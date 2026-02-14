@@ -245,7 +245,7 @@ export default function ListPage() {
         {/* Header */}
         <header className="h-14 border-b border-stone-200 bg-white flex items-center justify-between px-4 md:px-6 shrink-0">
           <div className="flex items-center gap-3">
-            <img src="/images/siml-5.png" alt="Siml" className="h-8 w-8 rounded-lg" />
+            <img src="/favicon.png" alt="Siml" className="h-8 w-8 rounded-lg" />
             <h1 className="text-lg font-serif text-stone-900">Siml</h1>
           </div>
         </header>

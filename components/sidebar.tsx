@@ -43,9 +43,27 @@ export function Sidebar() {
     load()
   }, [])
 
+  const [connecting, setConnecting] = useState("")
+
   const handleConnect = async (channel: string) => {
     if (channel === "Amazon") {
-      window.location.href = "/api/amazon/auth"
+      setConnecting("Amazon")
+      try {
+        const res = await fetch("/api/amazon/connect", { method: "POST" })
+        const data = await res.json()
+        if (data.success) {
+          // Reload channel connections
+          const supabase = createClient()
+          const { data: { user: u } } = await supabase.auth.getUser()
+          if (u) {
+            const { data: ch } = await supabase.from("channel_connections").select("*").eq("user_id", u.id)
+            if (ch) setChannels(ch)
+          }
+        }
+      } catch (e) {
+        console.log("[v0] Connect error:", e)
+      }
+      setConnecting("")
       return
     }
     // eBay/Shopify placeholder - go to settings
@@ -169,9 +187,10 @@ export function Sidebar() {
                   {status === "disconnected" && (
                     <button
                       onClick={() => handleConnect(channel)}
-                      className="text-[10px] text-stone-900 font-medium bg-stone-100 hover:bg-stone-200 px-2 py-0.5 rounded transition-colors"
+                      disabled={connecting === channel}
+                      className="text-[10px] text-stone-900 font-medium bg-stone-100 hover:bg-stone-200 px-2 py-0.5 rounded transition-colors disabled:opacity-50"
                     >
-                      {t("connect")}
+                      {connecting === channel ? "Connecting..." : t("connect")}
                     </button>
                   )}
                 </div>
