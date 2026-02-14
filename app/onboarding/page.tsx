@@ -42,9 +42,9 @@ const steps = [
     title: "Which channels do you sell on?",
     subtitle: "Select all that apply",
     channels: [
-      { id: "amazon", label: "Amazon", color: "bg-orange-100 text-orange-700 border-orange-200" },
-      { id: "ebay", label: "eBay", color: "bg-blue-100 text-blue-700 border-blue-200" },
-      { id: "shopify", label: "Shopify", color: "bg-green-100 text-green-700 border-green-200" },
+      { id: "Amazon", label: "Amazon", color: "bg-orange-100 text-orange-700 border-orange-200" },
+      { id: "eBay", label: "eBay", color: "bg-blue-100 text-blue-700 border-blue-200" },
+      { id: "Shopify", label: "Shopify", color: "bg-green-100 text-green-700 border-green-200" },
     ],
   },
   {

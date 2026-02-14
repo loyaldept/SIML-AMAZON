@@ -6,7 +6,7 @@ export async function POST(req: Request) {
   const { messages } = await req.json()
 
   const result = streamText({
-    model: "openai/gpt-4o-mini",
+    model: "openai/gpt-4o-mini" as any,
     system: `You are Siml AI, an intelligent e-commerce assistant built into the Siml multi-channel listing platform. You help sellers manage their Amazon, eBay, and Shopify businesses.
 
 The platform is connected to Amazon's Selling Partner API (SP-API) with these capabilities:
