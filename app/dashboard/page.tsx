@@ -39,6 +39,25 @@ export default function DashboardPage() {
   const [timeRange, setTimeRange] = useState<TimeRange>("7d")
   const [marketplace, setMarketplace] = useState<Marketplace>("all")
 
+  const reloadStats = async (supabase: any, userId: string) => {
+    const { data: inv } = await supabase.from("inventory").select("quantity").eq("user_id", userId)
+    const totalInv = inv?.reduce((sum: number, i: any) => sum + (i.quantity || 0), 0) || 0
+
+    const { data: lsts } = await supabase.from("listings").select("*").eq("user_id", userId).order("created_at", { ascending: false }).limit(10)
+    setListings(lsts || [])
+
+    const { data: orders } = await supabase.from("orders").select("*").eq("user_id", userId)
+    const totalOrders = orders?.length || 0
+    const totalRevenue = orders?.reduce((sum: number, o: any) => sum + Number(o.total_amount || 0), 0) || 0
+
+    setStats({
+      totalRevenue,
+      totalProfit: totalRevenue * 0.35,
+      totalOrders,
+      totalInventory: totalInv,
+    })
+  }
+
   useEffect(() => {
     loadDashboard()
   }, [])
@@ -52,33 +71,28 @@ export default function DashboardPage() {
     const { data: profile } = await supabase.from("profiles").select("*").eq("id", user.id).single()
     setUserName(profile?.full_name || profile?.first_name || user.email?.split("@")[0] || "Seller")
 
-    // Load inventory count
-    const { data: inv } = await supabase.from("inventory").select("quantity").eq("user_id", user.id)
-    const totalInv = inv?.reduce((sum: number, i: any) => sum + (i.quantity || 0), 0) || 0
-
-    // Load listings
-    const { data: lsts } = await supabase.from("listings").select("*").eq("user_id", user.id).order("created_at", { ascending: false }).limit(10)
-    setListings(lsts || [])
-
-    // Load orders
-    const { data: orders } = await supabase.from("orders").select("*").eq("user_id", user.id)
-    const totalOrders = orders?.length || 0
-    const totalRevenue = orders?.reduce((sum: number, o: any) => sum + Number(o.total_amount || 0), 0) || 0
-
-    // Load channels
+    // Load channels first to check connection status
     const { data: ch } = await supabase.from("channel_connections").select("channel, status, store_name").eq("user_id", user.id)
     setChannels(ch || [])
+
+    // If Amazon is connected, trigger a live sync from SP-API (runs in background)
+    const amazonConnected = ch?.some(c => c.channel === "Amazon" && c.status === "connected")
+    if (amazonConnected) {
+      fetch("/api/amazon/dashboard").then(r => r.json()).then(amazonData => {
+        if (amazonData.connected) {
+          // Re-load from Supabase after sync completes
+          reloadStats(supabase, user.id)
+        }
+      }).catch(() => {})
+    }
+
+    // Load initial data from Supabase
+    await reloadStats(supabase, user.id)
 
     // Load notifications
     const { data: notifs } = await supabase.from("notifications").select("*").eq("user_id", user.id).eq("read", false).order("created_at", { ascending: false }).limit(5)
     setNotifications(notifs || [])
 
-    setStats({
-      totalRevenue,
-      totalProfit: totalRevenue * 0.35,
-      totalOrders,
-      totalInventory: totalInv,
-    })
     setLoading(false)
   }
 

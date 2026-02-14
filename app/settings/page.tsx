@@ -105,21 +105,8 @@ function SettingsContent() {
     setConnecting(channel)
 
     if (channel === "Amazon") {
-      try {
-        const res = await fetch("/api/amazon/connect", { method: "POST" })
-        const data = await res.json()
-        if (data.success) {
-          const supabase = createClient()
-          const { data: { user } } = await supabase.auth.getUser()
-          if (user) {
-            const { data: ch } = await supabase.from("channel_connections").select("*").eq("user_id", user.id)
-            if (ch) setChannels(ch)
-          }
-        }
-      } catch (e) {
-        console.log("[v0] Connect error:", e)
-      }
-      setConnecting("")
+      // Redirect to Amazon Seller Central OAuth
+      window.location.href = "/api/amazon/auth"
       return
     }
 
