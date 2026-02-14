@@ -47,23 +47,8 @@ export function Sidebar() {
 
   const handleConnect = async (channel: string) => {
     if (channel === "Amazon") {
-      setConnecting("Amazon")
-      try {
-        const res = await fetch("/api/amazon/connect", { method: "POST" })
-        const data = await res.json()
-        if (data.success) {
-          // Reload channel connections
-          const supabase = createClient()
-          const { data: { user: u } } = await supabase.auth.getUser()
-          if (u) {
-            const { data: ch } = await supabase.from("channel_connections").select("*").eq("user_id", u.id)
-            if (ch) setChannels(ch)
-          }
-        }
-      } catch (e) {
-        console.log("[v0] Connect error:", e)
-      }
-      setConnecting("")
+      // Redirect to Amazon Seller Central OAuth authorization
+      window.location.href = "/api/amazon/auth"
       return
     }
     // eBay/Shopify placeholder - go to settings
