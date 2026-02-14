@@ -1,9 +1,9 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, Suspense } from "react"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
-import { TrendingUp, TrendingDown, Bell, Menu, Package, DollarSign, ShoppingCart, BarChart3, Loader2, Link2 } from "lucide-react"
+import { useRouter, useSearchParams } from "next/navigation"
+import { TrendingUp, TrendingDown, Bell, Menu, Package, DollarSign, ShoppingCart, BarChart3, Loader2, Link2, CheckCircle2 } from "lucide-react"
 import { Sidebar } from "@/components/sidebar"
 import { MobileNav } from "@/components/mobile-nav"
 import { createClient } from "@/lib/supabase/client"
@@ -28,7 +28,18 @@ interface ChannelStatus {
 }
 
 export default function DashboardPage() {
+  return (
+    <Suspense fallback={null}>
+      <DashboardContent />
+    </Suspense>
+  )
+}
+
+function DashboardContent() {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const amazonJustConnected = searchParams.get("amazon") === "connected"
+  const [showBanner, setShowBanner] = useState(amazonJustConnected)
   const [loading, setLoading] = useState(true)
   const [userName, setUserName] = useState("")
   const [stats, setStats] = useState<DashboardStats>({ totalRevenue: 0, totalProfit: 0, totalOrders: 0, totalInventory: 0 })
@@ -156,6 +167,16 @@ export default function DashboardPage() {
       <Sidebar />
 
       <main className="flex-1 flex flex-col relative bg-[#FBFBF9] h-full">
+        {/* Amazon Connected Success Banner */}
+        {showBanner && (
+          <div className="bg-emerald-50 border-b border-emerald-100 px-4 py-3 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+              <p className="text-sm text-emerald-800 font-medium">Amazon Seller account connected successfully! Syncing your data...</p>
+            </div>
+            <button onClick={() => setShowBanner(false)} className="text-emerald-600 hover:text-emerald-800 text-xs font-medium">Dismiss</button>
+          </div>
+        )}
         {/* Header */}
         <header className="h-14 px-4 md:px-6 flex items-center justify-between shrink-0 border-b border-stone-100/50">
           <div className="flex items-center gap-3">

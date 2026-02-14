@@ -1,5 +1,3 @@
-"use server"
-
 import { createClient } from "@/lib/supabase/server"
 
 const LWA_TOKEN_URL = "https://api.amazon.com/auth/o2/token"
