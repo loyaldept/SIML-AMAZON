@@ -2,7 +2,7 @@
 
 import { useState, useEffect, Suspense } from "react"
 import Link from "next/link"
-import { Package, Search, Bell, Menu, RefreshCw, AlertTriangle, Download, Upload, ChevronDown, MoreHorizontal, ArrowUpDown, Loader2 } from "lucide-react"
+import { Package, Search, Bell, Menu, RefreshCw, AlertTriangle, Download, Upload, ChevronDown, MoreHorizontal, ArrowUpDown, Loader2, Printer } from "lucide-react"
 import { Sidebar } from "@/components/sidebar"
 import { MobileNav } from "@/components/mobile-nav"
 
@@ -23,10 +23,13 @@ function InventoryContent() {
   const [searchQuery, setSearchQuery] = useState("")
   const [statusFilter, setStatusFilter] = useState<FilterType>("all")
   const [channelFilter, setChannelFilter] = useState<ChannelFilter>("all")
-  const [sortField, setSortField] = useState<SortField>("title")
-  const [sortDir, setSortDir] = useState<SortDir>("asc")
+  const [sortField, setSortField] = useState<SortField>("quantity")
+  const [sortDir, setSortDir] = useState<SortDir>("desc")
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [syncing, setSyncing] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [isConnected, setIsConnected] = useState(false)
+  const [totalValue, setTotalValue] = useState(0)
 
   useEffect(() => {
     loadInventory()
@@ -36,18 +39,43 @@ function InventoryContent() {
     setSyncing(true)
     try {
       await fetch("/api/amazon/inventory")
-      await loadInventory()
+      await loadInventoryFromDb()
     } catch {
       // Not connected or failed
     }
     setSyncing(false)
   }
 
+  const loadInventoryFromDb = async () => {
+    const supabase = createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return
+
+    const { data } = await supabase.from("inventory").select("*").eq("user_id", user.id).order("updated_at", { ascending: false })
+    if (data && data.length > 0) {
+      const items = data.map((item: any) => ({
+        id: item.id,
+        sku: item.sku,
+        asin: item.asin,
+        title: item.title,
+        imageUrl: item.image_url || "",
+        quantity: item.quantity,
+        price: Number(item.price || 0),
+        cost: Number(item.cost || 0),
+        channel: item.channel || "FBA",
+        status: item.status,
+        lastUpdated: new Date(item.updated_at),
+      }))
+      setInventory(items)
+      setTotalValue(items.reduce((sum: number, i: InventoryItem) => sum + (i.price * i.quantity), 0))
+    }
+  }
+
   const loadInventory = async () => {
+    setLoading(true)
     const supabase = createClient()
     const { data: { user } } = await supabase.auth.getUser()
     if (user) {
-      // Check if Amazon is connected — if so, only show real data from Supabase
       const { data: conn } = await supabase
         .from("channel_connections")
         .select("status")
@@ -56,9 +84,11 @@ function InventoryContent() {
         .eq("status", "connected")
         .single()
 
+      setIsConnected(!!conn)
+
       const { data } = await supabase.from("inventory").select("*").eq("user_id", user.id).order("updated_at", { ascending: false })
       if (data && data.length > 0) {
-        setInventory(data.map((item: any) => ({
+        const items = data.map((item: any) => ({
           id: item.id,
           sku: item.sku,
           asin: item.asin,
@@ -67,21 +97,42 @@ function InventoryContent() {
           quantity: item.quantity,
           price: Number(item.price || 0),
           cost: Number(item.cost || 0),
-          channel: item.channel,
+          channel: item.channel || "FBA",
           status: item.status,
           lastUpdated: new Date(item.updated_at),
-        })))
+        }))
+        setInventory(items)
+        setTotalValue(items.reduce((sum: number, i: InventoryItem) => sum + (i.price * i.quantity), 0))
+
+        // If Amazon is connected and many items have $0 price, auto-sync prices in background
+        if (conn) {
+          const zeroPriceCount = items.filter((i: InventoryItem) => i.price === 0).length
+          if (zeroPriceCount > items.length * 0.3) {
+            // More than 30% items missing price - trigger background sync
+            fetch("/api/amazon/inventory").then(() => loadInventoryFromDb()).catch(() => {})
+          }
+        }
+        setLoading(false)
         return
       }
 
-      // If Amazon is connected but no inventory yet, show empty state (not fake data)
+      // If Amazon is connected but no inventory yet, auto-sync
       if (conn) {
-        setInventory([])
+        setSyncing(true)
+        try {
+          await fetch("/api/amazon/inventory")
+          await loadInventoryFromDb()
+        } catch {
+          setInventory([])
+        }
+        setSyncing(false)
+        setLoading(false)
         return
       }
     }
     // Only show sample data for users with no Amazon connection (demo mode)
     setInventory(storage.getInventory())
+    setLoading(false)
   }
 
   const filteredInventory = inventory
@@ -126,6 +177,39 @@ function InventoryContent() {
       setSelectedIds(new Set())
     } else {
       setSelectedIds(new Set(filteredInventory.map((i) => i.id)))
+    }
+  }
+
+  const handlePrintLabels = async () => {
+    const selectedItems = filteredInventory.filter(i => selectedIds.has(i.id))
+    if (selectedItems.length === 0) return
+
+    try {
+      const res = await fetch("/api/amazon/labels", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          items: selectedItems.map(i => ({
+            sku: i.sku,
+            fnsku: i.sku, // Use SKU as FNSKU fallback
+            title: i.title,
+            condition: i.status === "active" ? "New" : "Used",
+            asin: i.asin,
+          })),
+          pageType: "PackageLabel_Plain_Paper",
+        }),
+      })
+
+      const data = await res.json()
+      if (data.html) {
+        const printWindow = window.open("", "_blank")
+        if (printWindow) {
+          printWindow.document.write(data.html)
+          printWindow.document.close()
+        }
+      }
+    } catch (e) {
+      console.log("Print labels error:", e)
     }
   }
 
@@ -206,6 +290,15 @@ function InventoryContent() {
         {/* Scrollable Content */}
         <div className="flex-1 overflow-y-auto px-4 md:px-6 py-6 pb-48">
           <div className="max-w-6xl mx-auto space-y-4">
+            {loading && (
+              <div className="flex flex-col items-center justify-center py-20">
+                <Loader2 className="w-8 h-8 text-stone-300 animate-spin mb-4" />
+                <p className="text-sm text-stone-500">{syncing ? "Syncing inventory from Amazon..." : "Loading inventory..."}</p>
+              </div>
+            )}
+
+            {!loading && (
+            <>
             {/* Bulk Actions Bar */}
             {selectedIds.size > 0 && (
               <div className="flex items-center gap-3 bg-stone-900 text-white rounded-xl px-4 py-2.5">
@@ -214,6 +307,7 @@ function InventoryContent() {
                 <button className="text-xs hover:text-white/80 transition-colors">Edit Prices</button>
                 <button className="text-xs hover:text-white/80 transition-colors">Change Status</button>
                 <button className="text-xs hover:text-white/80 transition-colors">Export Selected</button>
+                <button onClick={handlePrintLabels} className="text-xs hover:text-white/80 transition-colors flex items-center gap-1"><Printer className="w-3 h-3" />Print Labels</button>
                 <button className="text-xs text-red-300 hover:text-red-200 transition-colors">Delete</button>
                 <button onClick={() => setSelectedIds(new Set())} className="ml-auto text-xs text-white/50 hover:text-white/80">Clear</button>
               </div>
@@ -249,6 +343,26 @@ function InventoryContent() {
                   <ArrowUpDown className="w-3.5 h-3.5 text-stone-400" />
                   <span className="hidden sm:inline text-stone-600">Sort</span>
                 </button>
+              </div>
+            </div>
+
+            {/* Summary stats */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="bg-white rounded-xl border border-stone-200 p-3">
+                <div className="text-lg font-semibold text-stone-900">{inventory.length}</div>
+                <div className="text-[10px] text-stone-500">Total SKUs</div>
+              </div>
+              <div className="bg-white rounded-xl border border-stone-200 p-3">
+                <div className="text-lg font-semibold text-stone-900">{inventory.reduce((s, i) => s + i.quantity, 0)}</div>
+                <div className="text-[10px] text-stone-500">Total Units</div>
+              </div>
+              <div className="bg-white rounded-xl border border-stone-200 p-3">
+                <div className="text-lg font-semibold text-stone-900">${totalValue.toFixed(2)}</div>
+                <div className="text-[10px] text-stone-500">Est. Value</div>
+              </div>
+              <div className="bg-white rounded-xl border border-stone-200 p-3">
+                <div className="text-lg font-semibold text-stone-900">{inventory.filter(i => i.quantity === 0).length}</div>
+                <div className="text-[10px] text-stone-500">Out of Stock</div>
               </div>
             </div>
 
@@ -351,8 +465,14 @@ function InventoryContent() {
                       {/* Price */}
                       <div className="md:col-span-2 md:text-right">
                         <span className="md:hidden text-[10px] text-stone-500 mr-1">Price:</span>
-                        <span className="text-xs font-semibold text-stone-900">${item.price.toFixed(2)}</span>
-                        <div className="text-[10px] text-stone-500">Cost: ${item.cost.toFixed(2)}</div>
+                        {item.price > 0 ? (
+                          <span className="text-xs font-semibold text-stone-900">${item.price.toFixed(2)}</span>
+                        ) : (
+                          <span className="text-xs text-stone-400 italic">No price</span>
+                        )}
+                        {item.cost > 0 && (
+                          <div className="text-[10px] text-stone-500">Cost: ${item.cost.toFixed(2)}</div>
+                        )}
                       </div>
 
                       {/* Status */}
@@ -378,10 +498,12 @@ function InventoryContent() {
                 </div>
               )}
             </div>
+            </>
+            )}
           </div>
         </div>
 
-        
+
       </main>
 
       <MobileNav />
