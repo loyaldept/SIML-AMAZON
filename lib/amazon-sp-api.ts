@@ -91,20 +91,25 @@ export async function getAmazonToken(userId: string): Promise<string | null> {
 }
 
 // --- Generic SP-API caller ---
+// Build query strings manually instead of using URLSearchParams, because
+// URLSearchParams encodes commas (%2C) and colons (%3A). SP-API expects
+// unencoded commas for array params (Asins=B001,B002) and unencoded colons
+// in ISO 8601 timestamps (CreatedAfter=2025-01-01T00:00:00Z).
 
 export async function callSpApi(
   accessToken: string,
   path: string,
   options: { method?: string; body?: any; query?: Record<string, string> } = {}
 ) {
-  const url = new URL(path, SP_API_BASE)
-  if (options.query) {
-    for (const [k, v] of Object.entries(options.query)) {
-      url.searchParams.set(k, v)
-    }
+  let fullUrl = `${SP_API_BASE}${path}`
+  if (options.query && Object.keys(options.query).length > 0) {
+    const queryString = Object.entries(options.query)
+      .map(([key, value]) => `${key}=${value}`)
+      .join("&")
+    fullUrl += `?${queryString}`
   }
 
-  const res = await fetch(url.toString(), {
+  const res = await fetch(fullUrl, {
     method: options.method || "GET",
     headers: {
       "x-amz-access-token": accessToken,
@@ -136,6 +141,31 @@ export async function getOrders(accessToken: string, marketplaceIds: string[], c
       CreatedAfter: createdAfter || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
     },
   })
+}
+
+// Get all orders with pagination (follows NextToken to get every order)
+export async function getAllOrders(accessToken: string, marketplaceIds: string[], createdAfter?: string) {
+  const allOrders: any[] = []
+  let nextToken: string | undefined = undefined
+  const since = createdAfter || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+
+  do {
+    // When using NextToken, SP-API requires ONLY NextToken as the query param
+    const query: Record<string, string> = nextToken
+      ? { NextToken: nextToken }
+      : {
+          MarketplaceIds: marketplaceIds.join(","),
+          CreatedAfter: since,
+        }
+
+    const response: any = await callSpApi(accessToken, "/orders/v0/orders", { query })
+    const payload = response?.payload || response || {}
+    const orders = payload?.Orders || []
+    allOrders.push(...orders)
+    nextToken = payload?.NextToken
+  } while (nextToken && allOrders.length < 2000) // Safety limit
+
+  return allOrders
 }
 
 export async function getOrder(accessToken: string, orderId: string) {

@@ -4,7 +4,7 @@ import React, { useRef, useEffect, useState } from "react"
 import { useChat } from "@ai-sdk/react"
 import { DefaultChatTransport } from "ai"
 import Link from "next/link"
-import { ArrowUp, Loader2, Sparkles, Menu, Bell, Upload, FileText, ImageIcon } from "lucide-react"
+import { ArrowUp, Loader2, Sparkles, Menu, Bell, Upload, FileText, ImageIcon, AlertCircle } from "lucide-react"
 import { Sidebar } from "@/components/sidebar"
 import { MobileNav } from "@/components/mobile-nav"
 import { cn } from "@/lib/utils"
@@ -12,10 +12,22 @@ import { cn } from "@/lib/utils"
 export default function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const [input, setInput] = useState("")
+  const [chatError, setChatError] = useState("")
 
-  const { messages, sendMessage, status } = useChat({
+  const { messages, sendMessage, status, error } = useChat({
     transport: new DefaultChatTransport({ api: "/api/chat" }),
+    onError: (err: Error) => {
+      console.log("[Chat] Error:", err)
+      setChatError(err.message || "Failed to get a response. Check your API key configuration.")
+    },
   })
+
+  // Show error from the hook
+  useEffect(() => {
+    if (error) {
+      setChatError(error.message || "Chat connection error")
+    }
+  }, [error])
 
   const isLoading = status === "streaming" || status === "submitted"
 
@@ -30,6 +42,7 @@ export default function ChatPage() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!input.trim() || isLoading) return
+    setChatError("")
     sendMessage({ text: input })
     setInput("")
   }
@@ -46,6 +59,7 @@ export default function ChatPage() {
 
   const handlePromptClick = (prompt: string) => {
     if (isLoading) return
+    setChatError("")
     sendMessage({ text: prompt })
   }
 
@@ -170,6 +184,23 @@ export default function ChatPage() {
                   </div>
                 )
               })
+            )}
+
+            {/* Error display */}
+            {chatError && (
+              <div className="flex justify-start">
+                <div className="max-w-[85%] rounded-2xl px-4 py-3 bg-red-50 border border-red-200 text-red-800">
+                  <div className="flex items-center gap-2 mb-2 pb-2 border-b border-red-200">
+                    <AlertCircle className="w-3 h-3 text-red-500" />
+                    <span className="text-xs font-medium text-red-600">Error</span>
+                  </div>
+                  <p className="text-sm leading-relaxed">{chatError}</p>
+                  <p className="text-xs text-red-500 mt-2">
+                    To set up the AI chat, add your <strong>OPENAI_API_KEY</strong> in your Vercel project&apos;s Environment Variables (Settings &gt; Environment Variables). Get a key at{" "}
+                    <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" className="underline">platform.openai.com/api-keys</a>.
+                  </p>
+                </div>
+              </div>
             )}
 
             {isLoading && messages.length > 0 && (() => {
