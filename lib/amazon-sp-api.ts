@@ -103,10 +103,13 @@ export async function callSpApi(
 ) {
   let fullUrl = `${SP_API_BASE}${path}`
   if (options.query && Object.keys(options.query).length > 0) {
-    const queryString = Object.entries(options.query)
-      .map(([key, value]) => `${key}=${value}`)
-      .join("&")
-    fullUrl += `?${queryString}`
+    const params = new URLSearchParams()
+    for (const [key, value] of Object.entries(options.query)) {
+      if (value !== undefined && value !== null) {
+        params.append(key, value)
+      }
+    }
+    fullUrl += `?${params.toString()}`
   }
 
   const res = await fetch(fullUrl, {

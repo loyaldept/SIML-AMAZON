@@ -368,11 +368,21 @@ function DashboardContent() {
                     <div className="p-2 rounded-lg bg-stone-100">
                       <BarChart3 className="w-4 h-4 text-stone-600" />
                     </div>
+                    {syncing && <Loader2 className="w-3 h-3 animate-spin text-stone-400" />}
                   </div>
                   <div className="text-2xl font-semibold text-stone-900 font-serif">
-                    {amazonData?.participations?.filter((p: any) => p.participation?.isParticipating)?.length || (amazonConnected ? 1 : 0)}
+                    {amazonData?.active_marketplace_count ?? (amazonConnected ? 1 : 0)}
                   </div>
                   <div className="text-xs text-stone-500 mt-1">Active Marketplaces</div>
+                  {amazonData?.active_marketplaces?.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {amazonData.active_marketplaces.slice(0, 3).map((mp: any) => (
+                        <span key={mp.id} className="text-[9px] bg-stone-100 text-stone-600 px-1.5 py-0.5 rounded font-medium">
+                          {mp.countryCode || mp.name}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -497,6 +507,98 @@ function DashboardContent() {
                 </div>
               </div>
             )}
+
+            {/* Seller Insights Row */}
+            {amazonConnected && orders.length > 0 && (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {/* Average Order Value */}
+                <div className="bg-white rounded-xl border border-stone-200 p-4">
+                  <div className="text-xs text-stone-500 mb-1">Avg Order Value</div>
+                  <div className="text-xl font-semibold text-stone-900 font-serif">
+                    ${displayOrders > 0 ? (displayRevenue / displayOrders).toFixed(2) : "0.00"}
+                  </div>
+                  <div className="text-[10px] text-stone-400 mt-1">{timeRangeLabel}</div>
+                </div>
+
+                {/* Cancellation Rate */}
+                <div className="bg-white rounded-xl border border-stone-200 p-4">
+                  <div className="text-xs text-stone-500 mb-1">Cancellation Rate</div>
+                  <div className="text-xl font-semibold text-stone-900 font-serif">
+                    {(() => {
+                      const canceled = filteredOrders.filter((o: any) => (o.OrderStatus || o.status) === "Canceled").length
+                      const total = filteredOrders.length
+                      return total > 0 ? `${((canceled / total) * 100).toFixed(1)}%` : "0%"
+                    })()}
+                  </div>
+                  <div className="text-[10px] text-stone-400 mt-1">
+                    {filteredOrders.filter((o: any) => (o.OrderStatus || o.status) === "Canceled").length} canceled of {filteredOrders.length}
+                  </div>
+                </div>
+
+                {/* Fulfillment Rate */}
+                <div className="bg-white rounded-xl border border-stone-200 p-4">
+                  <div className="text-xs text-stone-500 mb-1">Fulfillment Rate</div>
+                  <div className="text-xl font-semibold text-stone-900 font-serif">
+                    {(() => {
+                      const total = filteredOrders.length
+                      return total > 0 ? `${((shippedOrders / total) * 100).toFixed(1)}%` : "0%"
+                    })()}
+                  </div>
+                  <div className="text-[10px] text-stone-400 mt-1">
+                    {shippedOrders} shipped of {filteredOrders.length} orders
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Low Stock Alerts */}
+            {amazonConnected && amazonData?.fba_inventory?.length > 0 && (() => {
+              const lowStockItems = amazonData.fba_inventory.filter((item: any) => {
+                const qty = item.inventoryDetails?.fulfillableQuantity || item.totalQuantity || 0
+                return qty > 0 && qty <= 5
+              })
+              const outOfStockItems = amazonData.fba_inventory.filter((item: any) => {
+                const qty = item.inventoryDetails?.fulfillableQuantity || item.totalQuantity || 0
+                return qty === 0
+              })
+              if (lowStockItems.length === 0 && outOfStockItems.length === 0) return null
+              return (
+                <div className="bg-amber-50 rounded-xl border border-amber-200 p-5">
+                  <div className="flex items-center gap-2 mb-3">
+                    <AlertCircle className="w-4 h-4 text-amber-600" />
+                    <h3 className="text-sm font-semibold text-amber-900">Stock Alerts</h3>
+                    <span className="text-[10px] bg-amber-200 text-amber-800 px-1.5 py-0.5 rounded-full font-medium">
+                      {lowStockItems.length + outOfStockItems.length} items need attention
+                    </span>
+                  </div>
+                  <div className="space-y-2">
+                    {outOfStockItems.slice(0, 3).map((item: any, i: number) => (
+                      <div key={`oos-${i}`} className="flex items-center justify-between py-2 px-3 rounded-lg bg-red-50 border border-red-100">
+                        <div>
+                          <div className="text-xs font-medium text-red-900">{item.productName || item.asin}</div>
+                          <div className="text-[10px] text-red-600">SKU: {item.sellerSku || "N/A"}</div>
+                        </div>
+                        <span className="text-[10px] font-bold text-red-700 bg-red-100 px-2 py-0.5 rounded">OUT OF STOCK</span>
+                      </div>
+                    ))}
+                    {lowStockItems.slice(0, 3).map((item: any, i: number) => (
+                      <div key={`low-${i}`} className="flex items-center justify-between py-2 px-3 rounded-lg bg-white border border-amber-100">
+                        <div>
+                          <div className="text-xs font-medium text-stone-900">{item.productName || item.asin}</div>
+                          <div className="text-[10px] text-stone-500">SKU: {item.sellerSku || "N/A"}</div>
+                        </div>
+                        <span className="text-[10px] font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded">
+                          {item.inventoryDetails?.fulfillableQuantity || item.totalQuantity || 0} left
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  <Link href="/inventory" className="mt-3 block text-center text-xs text-amber-700 hover:text-amber-900 font-medium">
+                    View full inventory →
+                  </Link>
+                </div>
+              )
+            })()}
 
             {/* FBA Inventory Summary */}
             {amazonConnected && amazonData?.fba_inventory?.length > 0 && (

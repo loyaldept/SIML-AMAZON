@@ -60,12 +60,29 @@ export async function GET(request: Request) {
     getOrderMetrics(accessToken, marketplaceIds, salesInterval, "Day").catch(() => null),
   ])
 
-  // 1. Seller participations
+  // 1. Seller participations - filter to only actively participating marketplaces
   if (sellerResult.status === "fulfilled") {
-    result.participations = sellerResult.value?.payload || []
+    const allParticipations = sellerResult.value?.payload || []
+    result.participations = allParticipations
+
+    // Count only marketplaces where the seller is actively participating AND has hasSellerSuspendedListings = false
+    const activeMarketplaces = allParticipations.filter((p: any) => {
+      const isParticipating = p.participation?.isParticipating === true
+      const notSuspended = p.participation?.hasSuspendedListings !== true
+      return isParticipating && notSuspended
+    })
+    result.active_marketplace_count = activeMarketplaces.length
+    result.active_marketplaces = activeMarketplaces.map((p: any) => ({
+      id: p.marketplace?.id,
+      name: p.marketplace?.name,
+      countryCode: p.marketplace?.countryCode,
+      defaultLanguageCode: p.marketplace?.defaultLanguageCode,
+    }))
   } else {
     result.errors.push(`Seller info: ${sellerResult.reason?.message}`)
     result.participations = []
+    result.active_marketplace_count = 0
+    result.active_marketplaces = []
   }
 
   // 2. Orders - getAllOrders returns a flat array (already paginated)

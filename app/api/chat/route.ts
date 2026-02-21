@@ -5,9 +5,13 @@ import {
   UIMessage,
   stepCountIs,
 } from "ai"
-import { openai } from "@ai-sdk/openai"
+import { createGoogleGenerativeAI } from "@ai-sdk/google"
 import { createClient } from "@/lib/supabase/server"
 import { z } from "zod"
+
+const google = createGoogleGenerativeAI({
+  apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY || "AIzaSyAN_niJmQCKK4sPtMJIFA-7t9_RWDuYCDM",
+})
 
 export const maxDuration = 30
 
@@ -267,27 +271,12 @@ const tools = {
 }
 
 export async function POST(req: Request) {
-  // Check for OpenAI API key first
-  if (!process.env.OPENAI_API_KEY) {
-    return new Response(
-      `data: {"type":"error","error":{"message":"Chat requires an OpenAI API key. Set the OPENAI_API_KEY environment variable in your Vercel project settings (Settings > Environment Variables). Get a key from https://platform.openai.com/api-keys"}}\n\n`,
-      {
-        status: 200,
-        headers: {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache",
-          Connection: "keep-alive",
-        },
-      }
-    )
-  }
-
   try {
     const body = await req.json()
     const messages: UIMessage[] = body.messages
 
     const result = streamText({
-      model: openai("gpt-4o-mini"),
+      model: google("gemini-2.0-flash"),
       system: `You are Siml AI, an intelligent e-commerce assistant built into the Siml multi-channel listing platform. You help Amazon, eBay, and Shopify sellers manage their business.
 
 You have access to tools that look up REAL inventory, orders, listings, financial data, and channel connection status from the user's actual accounts.
@@ -316,13 +305,12 @@ RULES:
     const errMsg = error?.message || "Chat failed"
     console.error("[Chat] API error:", errMsg)
 
-    // Return a stream-compatible error so the client can display it
     const errorText = errMsg.includes("API key")
-      ? "Invalid or missing OpenAI API key. Check your OPENAI_API_KEY environment variable."
+      ? "Invalid or missing Gemini API key. Check your GOOGLE_GENERATIVE_AI_API_KEY environment variable."
       : errMsg.includes("429") || errMsg.includes("rate")
-        ? "Rate limited by OpenAI. Please wait a moment and try again."
-        : errMsg.includes("insufficient_quota")
-          ? "OpenAI API quota exceeded. Add credits at https://platform.openai.com/account/billing"
+        ? "Rate limited by Gemini API. Please wait a moment and try again."
+        : errMsg.includes("quota")
+          ? "Gemini API quota exceeded. Check your Google Cloud billing."
           : `Chat error: ${errMsg}`
 
     return new Response(JSON.stringify({ error: errorText }), {
