@@ -48,7 +48,8 @@ export async function updateSession(request: NextRequest) {
   } = await supabase.auth.getUser()
 
   // Allow Amazon OAuth callback through without auth check (it handles auth via state param)
-  if (request.nextUrl.pathname.includes('/api/auth/amazon/callback')) {
+  if (request.nextUrl.pathname.includes('/api/auth/amazon/callback') ||
+      request.nextUrl.pathname.includes('/api/amazon/callback')) {
     return supabaseResponse
   }
 

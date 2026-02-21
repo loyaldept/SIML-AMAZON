@@ -109,6 +109,7 @@ export async function callSpApi(
     headers: {
       "x-amz-access-token": accessToken,
       "Content-Type": "application/json",
+      "User-Agent": "SIML-Listing/1.0 (Language=TypeScript; Platform=NextJS)",
     },
     body: options.body ? JSON.stringify(options.body) : undefined,
   })
@@ -181,7 +182,7 @@ export async function getMyPrice(accessToken: string, marketplaceId: string, asi
 }
 
 export async function getCompetitivePricing(accessToken: string, marketplaceId: string, asins: string[]) {
-  return callSpApi(accessToken, "/products/pricing/v0/competitivePrice", {
+  return callSpApi(accessToken, "/products/pricing/v0/competitivePricing", {
     query: {
       MarketplaceId: marketplaceId,
       ItemType: "Asin",

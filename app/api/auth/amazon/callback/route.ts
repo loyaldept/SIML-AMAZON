@@ -65,15 +65,18 @@ export async function GET(request: NextRequest) {
       if (sellerData?.payload && Array.isArray(sellerData.payload)) {
         marketplaces = sellerData.payload
         // Find the US marketplace participation, or use the first one
+        // Response format: { marketplace: { id, name, countryCode }, participation: { isParticipating } }
         const usParticipation = sellerData.payload.find(
           (p: any) => p.marketplace?.id === "ATVPDKIKX0DER"
         ) || sellerData.payload[0]
 
         if (usParticipation) {
-          sellerId = usParticipation.seller?.sellerId || sellerId
+          // Note: Marketplace Participations API does NOT return seller ID.
+          // The seller ID comes from the OAuth callback's selling_partner_id parameter.
           marketplaceId = usParticipation.marketplace?.id || marketplaceId
           const countryCode = usParticipation.marketplace?.countryCode || "US"
-          storeName = `Amazon ${countryCode} (${sellerId})`
+          const marketplaceName = usParticipation.marketplace?.name || "Amazon"
+          storeName = `${marketplaceName} (${sellerId || sellingPartnerId || countryCode})`
         }
       }
     } catch (sellerError: any) {
@@ -101,7 +104,7 @@ export async function GET(request: NextRequest) {
           marketplace_participations: marketplaces.map((m: any) => ({
             marketplace_id: m.marketplace?.id,
             country: m.marketplace?.countryCode,
-            seller_id: m.seller?.sellerId,
+            name: m.marketplace?.name,
           })),
           connected_at: new Date().toISOString(),
         },

@@ -60,11 +60,16 @@ export async function POST() {
       console.log("[v0] Seller info fetch error:", e.message)
     }
 
-    // Extract seller name and marketplace info
-    const participation = sellerInfo?.payload?.[0]
-    const storeName = participation?.marketplace?.name || "Amazon Seller"
-    const marketplaceId = participation?.marketplace?.id || "ATVPDKIKX0DER"
-    const sellerId = participation?.sellingPartner?.id || null
+    // Extract seller name and marketplace info from Marketplace Participations response
+    // Response format: { payload: [{ marketplace: { id, name, countryCode, ... }, participation: { isParticipating, ... } }] }
+    const participations = sellerInfo?.payload || []
+    const usParticipation = participations.find(
+      (p: any) => p.marketplace?.id === "ATVPDKIKX0DER"
+    ) || participations[0]
+    const storeName = usParticipation?.marketplace?.name || "Amazon Seller"
+    const marketplaceId = usParticipation?.marketplace?.id || "ATVPDKIKX0DER"
+    // Seller ID is not in the Marketplace Participations response — use env var or extract from orders
+    const sellerId = process.env.AMAZON_SELLER_ID || null
 
     // Step 3: Store connection in Supabase
     const { error: upsertError } = await supabase.from("channel_connections").upsert(
@@ -80,7 +85,11 @@ export async function POST() {
         marketplace_id: marketplaceId,
         seller_id: sellerId,
         credentials: {
-          marketplace_participations: sellerInfo?.payload || [],
+          marketplace_participations: participations.map((p: any) => ({
+            marketplace_id: p.marketplace?.id,
+            country: p.marketplace?.countryCode,
+            name: p.marketplace?.name,
+          })),
           connected_at: new Date().toISOString(),
         },
       },
@@ -100,8 +109,9 @@ export async function POST() {
       message: `Successfully connected to ${storeName}. Your seller data is now syncing.`,
     })
 
-    // Step 5: Try to sync recent orders
+    // Step 5: Try to sync recent orders and extract seller ID from order data if needed
     let orderCount = 0
+    let extractedSellerId = sellerId
     try {
       const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
       const ordersRes = await fetch(
@@ -110,6 +120,7 @@ export async function POST() {
           headers: {
             "x-amz-access-token": accessToken,
             "Content-Type": "application/json",
+            "User-Agent": "SIML-Listing/1.0",
           },
         }
       )
@@ -117,6 +128,12 @@ export async function POST() {
         const ordersData = await ordersRes.json()
         const orders = ordersData?.payload?.Orders || []
         orderCount = orders.length
+
+        // Try to extract seller ID from order data if we don't have one
+        if (!extractedSellerId && orders.length > 0) {
+          extractedSellerId = orders[0]?.SellerOrderId?.split("-")?.[0] || null
+        }
+
         for (const order of orders.slice(0, 20)) {
           await supabase.from("orders").upsert({
             user_id: user.id,
@@ -136,13 +153,21 @@ export async function POST() {
       console.log("[v0] Order sync error:", e.message)
     }
 
+    // Update seller_id if we extracted one from orders
+    if (extractedSellerId && extractedSellerId !== sellerId) {
+      await supabase.from("channel_connections")
+        .update({ seller_id: extractedSellerId })
+        .eq("user_id", user.id)
+        .eq("channel", "Amazon")
+    }
+
     return NextResponse.json({
       success: true,
       store_name: storeName,
       marketplace_id: marketplaceId,
-      seller_id: sellerId,
+      seller_id: extractedSellerId || sellerId,
       orders_synced: orderCount,
-      participations: sellerInfo?.payload || [],
+      participations: participations,
     })
   } catch (error: any) {
     console.log("[v0] Connect error:", error.message)

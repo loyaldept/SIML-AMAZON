@@ -47,6 +47,15 @@ function InventoryContent() {
     const supabase = createClient()
     const { data: { user } } = await supabase.auth.getUser()
     if (user) {
+      // Check if Amazon is connected — if so, only show real data from Supabase
+      const { data: conn } = await supabase
+        .from("channel_connections")
+        .select("status")
+        .eq("user_id", user.id)
+        .eq("channel", "Amazon")
+        .eq("status", "connected")
+        .single()
+
       const { data } = await supabase.from("inventory").select("*").eq("user_id", user.id).order("updated_at", { ascending: false })
       if (data && data.length > 0) {
         setInventory(data.map((item: any) => ({
@@ -56,7 +65,7 @@ function InventoryContent() {
           title: item.title,
           imageUrl: item.image_url || "",
           quantity: item.quantity,
-          price: Number(item.price),
+          price: Number(item.price || 0),
           cost: Number(item.cost || 0),
           channel: item.channel,
           status: item.status,
@@ -64,8 +73,14 @@ function InventoryContent() {
         })))
         return
       }
+
+      // If Amazon is connected but no inventory yet, show empty state (not fake data)
+      if (conn) {
+        setInventory([])
+        return
+      }
     }
-    // Fallback to local sample data
+    // Only show sample data for users with no Amazon connection (demo mode)
     setInventory(storage.getInventory())
   }
 
