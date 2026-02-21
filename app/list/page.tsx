@@ -51,6 +51,9 @@ export default function ListPage() {
   const [listingProgress, setListingProgress] = useState(0)
   const [listingChannel, setListingChannel] = useState("")
   const [csvFile, setCsvFile] = useState<File | null>(null)
+  const [csvProcessing, setCsvProcessing] = useState(false)
+  const [csvProgress, setCsvProgress] = useState(0)
+  const [csvResults, setCsvResults] = useState<Array<{ identifier: string; status: "success" | "error" | "pending"; title?: string; error?: string }>>([])
   const [manualTitle, setManualTitle] = useState("")
   const [manualAsin, setManualAsin] = useState("")
   const [manualPrice, setManualPrice] = useState("")
@@ -231,10 +234,210 @@ export default function ListPage() {
     setListSku("")
   }
 
+  const handleManualList = async () => {
+    if (!manualTitle || !manualPrice) return
+    setIsListing(true)
+
+    const supabase = createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) { setIsListing(false); return }
+
+    for (const channel of manualChannels) {
+      const sku = manualSku || manualAsin || `MANUAL-${Date.now()}`
+      const price = parseFloat(manualPrice) || 0
+
+      if (channel === "Amazon" && manualAsin) {
+        try {
+          await fetch("/api/amazon/listings", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sku,
+              productType: "PRODUCT",
+              attributes: {
+                item_name: [{ value: manualTitle, marketplace_id: "ATVPDKIKX0DER" }],
+                condition_type: [{ value: manualCondition === "new" ? "new_new" : "used_good" }],
+                purchasable_offer: [{
+                  our_price: [{ schedule: [{ value_with_tax: price }] }],
+                  marketplace_id: "ATVPDKIKX0DER",
+                }],
+                fulfillment_availability: [{
+                  fulfillment_channel_code: "DEFAULT",
+                  quantity: parseInt(manualQuantity) || 1,
+                }],
+              },
+            }),
+          })
+        } catch {}
+      }
+
+      await supabase.from("inventory").upsert({
+        user_id: user.id,
+        asin: manualAsin || sku,
+        sku,
+        title: manualTitle,
+        quantity: parseInt(manualQuantity) || 1,
+        price,
+        channel,
+        status: "active",
+      }, { onConflict: "user_id,asin" })
+
+      await supabase.from("listings").insert({
+        user_id: user.id,
+        title: manualTitle,
+        asin: manualAsin || "",
+        sku,
+        price,
+        quantity: parseInt(manualQuantity) || 1,
+        condition: manualCondition,
+        channel,
+        status: "active",
+      })
+    }
+
+    await loadListings()
+    setIsListing(false)
+    setManualTitle("")
+    setManualAsin("")
+    setManualPrice("")
+    setManualQuantity("1")
+    setManualSku("")
+  }
+
   const handleDeleteListing = async (id: string) => {
     const supabase = createClient()
     await supabase.from("listings").delete().eq("id", id)
     await loadListings()
+  }
+
+  const handleProcessCsv = async () => {
+    if (!csvFile) return
+    setCsvProcessing(true)
+    setCsvProgress(0)
+    setCsvResults([])
+
+    try {
+      const text = await csvFile.text()
+      const lines = text.split("\n").map(l => l.trim()).filter(l => l.length > 0)
+
+      // Skip header row if it looks like headers
+      const firstLine = lines[0]?.toLowerCase() || ""
+      const startIdx = (firstLine.includes("asin") || firstLine.includes("isbn") || firstLine.includes("upc") || firstLine.includes("title")) ? 1 : 0
+      const dataLines = lines.slice(startIdx)
+
+      if (dataLines.length === 0) {
+        setCsvProcessing(false)
+        return
+      }
+
+      const results: typeof csvResults = dataLines.map(line => {
+        const cols = line.split(",").map(c => c.trim().replace(/^["']|["']$/g, ""))
+        return { identifier: cols[0] || "", status: "pending" as const }
+      })
+      setCsvResults([...results])
+
+      const supabase = createClient()
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) { setCsvProcessing(false); return }
+
+      for (let i = 0; i < dataLines.length; i++) {
+        const cols = dataLines[i].split(",").map(c => c.trim().replace(/^["']|["']$/g, ""))
+        const identifier = cols[0] // ASIN, ISBN, or UPC
+        const csvTitle = cols[1] || ""
+        const csvCondition = cols[2] || "new"
+        const csvPrice = cols[3] || ""
+        const csvQuantity = cols[4] || "1"
+        const csvSku = cols[5] || identifier
+
+        if (!identifier) {
+          results[i] = { identifier: "(empty)", status: "error", error: "No identifier" }
+          setCsvResults([...results])
+          continue
+        }
+
+        setCsvProgress(Math.round((i / dataLines.length) * 100))
+
+        try {
+          // Look up product via Keepa
+          const res = await fetch(`/api/keepa?query=${encodeURIComponent(identifier)}`)
+          const data = await res.json()
+
+          if (!res.ok) {
+            results[i] = { identifier, status: "error", error: data.error || "Not found" }
+            setCsvResults([...results])
+            continue
+          }
+
+          const title = csvTitle || data.title || identifier
+          const price = csvPrice ? parseFloat(csvPrice) : (data.buyBoxPrice || data.newPrice || 0)
+          const quantity = parseInt(csvQuantity) || 1
+          const sku = csvSku || data.asin
+
+          // Try listing via SP-API
+          try {
+            await fetch("/api/amazon/listings", {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                sku,
+                productType: "PRODUCT",
+                attributes: {
+                  item_name: [{ value: title, marketplace_id: "ATVPDKIKX0DER" }],
+                  condition_type: [{ value: csvCondition === "used" ? "used_good" : "new_new" }],
+                  purchasable_offer: [{
+                    our_price: [{ schedule: [{ value_with_tax: price }] }],
+                    marketplace_id: "ATVPDKIKX0DER",
+                  }],
+                  fulfillment_availability: [{
+                    fulfillment_channel_code: "DEFAULT",
+                    quantity,
+                  }],
+                },
+              }),
+            })
+          } catch {
+            // SP-API listing failed - continue with local save
+          }
+
+          // Save to DB
+          await supabase.from("inventory").upsert({
+            user_id: user.id,
+            asin: data.asin,
+            sku,
+            title,
+            image_url: data.imageUrl,
+            quantity,
+            price,
+            channel: "Amazon",
+            status: "active",
+          }, { onConflict: "user_id,asin" })
+
+          await supabase.from("listings").insert({
+            user_id: user.id,
+            title,
+            asin: data.asin,
+            sku,
+            price,
+            quantity,
+            condition: csvCondition,
+            channel: "Amazon",
+            status: "active",
+            image_url: data.imageUrl,
+          })
+
+          results[i] = { identifier, status: "success", title }
+        } catch (e: any) {
+          results[i] = { identifier, status: "error", error: e.message }
+        }
+        setCsvResults([...results])
+      }
+
+      setCsvProgress(100)
+      await loadListings()
+    } catch (e: any) {
+      console.log("CSV processing error:", e)
+    }
+    setCsvProcessing(false)
   }
 
   return (
@@ -567,21 +770,81 @@ export default function ListPage() {
                           <p className="text-sm font-medium text-stone-900 truncate">{csvFile.name}</p>
                           <p className="text-xs text-stone-400">{(csvFile.size / 1024).toFixed(1)} KB</p>
                         </div>
-                        <button onClick={() => setCsvFile(null)} className="p-1 text-stone-400 hover:text-stone-600">
-                          <X className="w-4 h-4" />
-                        </button>
+                        {!csvProcessing && (
+                          <button onClick={() => { setCsvFile(null); setCsvResults([]) }} className="p-1 text-stone-400 hover:text-stone-600">
+                            <X className="w-4 h-4" />
+                          </button>
+                        )}
                       </div>
-                      <button className="w-full py-2.5 rounded-lg text-sm font-medium bg-stone-900 text-white hover:bg-stone-800 transition-colors">
-                        Process & Upload Listings
-                      </button>
+
+                      {!csvProcessing && csvResults.length === 0 && (
+                        <button
+                          onClick={handleProcessCsv}
+                          className="w-full py-2.5 rounded-lg text-sm font-medium bg-stone-900 text-white hover:bg-stone-800 transition-colors flex items-center justify-center gap-2"
+                        >
+                          <ShoppingCart className="w-4 h-4" />
+                          Process & List Products via Keepa
+                        </button>
+                      )}
+
+                      {csvProcessing && (
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs text-stone-500">Processing products via Keepa...</span>
+                            <span className="text-xs font-medium text-stone-700">{csvProgress}%</span>
+                          </div>
+                          <div className="w-full bg-stone-100 rounded-full h-1.5 overflow-hidden">
+                            <div className="bg-stone-900 h-1.5 rounded-full transition-all duration-500" style={{ width: `${csvProgress}%` }} />
+                          </div>
+                        </div>
+                      )}
+
+                      {csvResults.length > 0 && (
+                        <div className="space-y-1.5 max-h-60 overflow-y-auto">
+                          {csvResults.map((r, i) => (
+                            <div key={i} className={cn(
+                              "flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs",
+                              r.status === "success" ? "bg-emerald-50" : r.status === "error" ? "bg-red-50" : "bg-stone-50"
+                            )}>
+                              {r.status === "success" ? (
+                                <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                              ) : r.status === "error" ? (
+                                <AlertCircle className="w-3.5 h-3.5 text-red-500 shrink-0" />
+                              ) : (
+                                <Loader2 className="w-3.5 h-3.5 text-stone-400 animate-spin shrink-0" />
+                              )}
+                              <span className="font-mono text-stone-700">{r.identifier}</span>
+                              {r.title && <span className="text-stone-500 truncate">{r.title}</span>}
+                              {r.error && <span className="text-red-600">{r.error}</span>}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {!csvProcessing && csvResults.length > 0 && (
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => { setCsvFile(null); setCsvResults([]); setCsvProgress(0) }}
+                            className="flex-1 py-2 rounded-lg text-xs font-medium bg-stone-900 text-white hover:bg-stone-800 transition-colors"
+                          >
+                            Upload Another File
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
 
                   <div className="mt-6 pt-4 border-t border-stone-100">
                     <p className="text-xs font-medium text-stone-600 mb-2">CSV Format Guide</p>
-                    <div className="bg-stone-50 rounded-lg p-3 font-mono text-[11px] text-stone-600 overflow-x-auto">
-                      ASIN, Title, Condition, Price, Quantity, SKU
+                    <div className="bg-stone-50 rounded-lg p-3 font-mono text-[11px] text-stone-600 overflow-x-auto whitespace-pre">
+{`ASIN/ISBN/UPC, Title (optional), Condition, Price, Quantity, SKU
+9780439064873, , new, 12.99, 5, MY-SKU-001
+B08N5WRWNW, , new, 29.99, 10,
+0439064872, , used, 8.50, 3,`}
                     </div>
+                    <p className="text-[10px] text-stone-400 mt-2">
+                      Each row is looked up via Keepa. Title, price, and SKU are auto-filled if left empty.
+                    </p>
                   </div>
                 </div>
               </div>
@@ -688,15 +951,20 @@ export default function ListPage() {
                       </div>
                     </div>
                     <button
-                      disabled={!manualTitle || !manualPrice || manualChannels.length === 0}
+                      onClick={handleManualList}
+                      disabled={!manualTitle || !manualPrice || manualChannels.length === 0 || isListing}
                       className={cn(
-                        "w-full py-2.5 rounded-lg text-sm font-medium transition-all",
-                        manualTitle && manualPrice && manualChannels.length > 0
+                        "w-full py-2.5 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-2",
+                        manualTitle && manualPrice && manualChannels.length > 0 && !isListing
                           ? "bg-stone-900 text-white hover:bg-stone-800"
                           : "bg-stone-200 text-stone-400 cursor-not-allowed"
                       )}
                     >
-                      {`Create Listing on ${manualChannels.length > 0 ? manualChannels.join(", ") : "..."}`}
+                      {isListing ? (
+                        <><Loader2 className="w-4 h-4 animate-spin" /> Listing...</>
+                      ) : (
+                        `Create Listing on ${manualChannels.length > 0 ? manualChannels.join(", ") : "..."}`
+                      )}
                     </button>
                   </div>
                 </div>

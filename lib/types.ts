@@ -7,7 +7,7 @@ export interface InventoryItem {
   quantity: number
   price: number
   cost: number
-  channel: "FBA" | "FBM" | "Amazon" | "eBay"
+  channel: "FBA" | "FBM" | "Amazon" | "eBay" | "Shopify" | string
   status: "active" | "inactive" | "out_of_stock"
   lastUpdated: Date
 }

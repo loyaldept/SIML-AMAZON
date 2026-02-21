@@ -369,7 +369,9 @@ function DashboardContent() {
                       <BarChart3 className="w-4 h-4 text-stone-600" />
                     </div>
                   </div>
-                  <div className="text-2xl font-semibold text-stone-900 font-serif">{amazonData?.participations?.length || 0}</div>
+                  <div className="text-2xl font-semibold text-stone-900 font-serif">
+                    {amazonData?.participations?.filter((p: any) => p.participation?.isParticipating)?.length || (amazonConnected ? 1 : 0)}
+                  </div>
                   <div className="text-xs text-stone-500 mt-1">Active Marketplaces</div>
                 </div>
               </div>

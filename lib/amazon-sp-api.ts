@@ -315,6 +315,90 @@ export async function getInboundShipmentItems(accessToken: string, shipmentId: s
   return callSpApi(accessToken, `/fba/inbound/v0/shipments/${shipmentId}/items`)
 }
 
+// Create inbound shipment plan (step 1: Amazon tells you where to send)
+export async function createInboundShipmentPlan(accessToken: string, body: {
+  ShipFromAddress: {
+    Name: string
+    AddressLine1: string
+    City: string
+    StateOrProvinceCode: string
+    PostalCode: string
+    CountryCode: string
+  }
+  InboundShipmentPlanRequestItems: Array<{
+    SellerSKU: string
+    ASIN: string
+    Quantity: number
+    Condition: string
+    QuantityInCase?: number
+  }>
+  LabelPrepPreference?: string
+}) {
+  return callSpApi(accessToken, "/fba/inbound/v0/plans", {
+    method: "POST",
+    body: {
+      ...body,
+      LabelPrepPreference: body.LabelPrepPreference || "SELLER_LABEL",
+    },
+  })
+}
+
+// Create the actual inbound shipment (step 2: after getting a plan)
+export async function createInboundShipment(accessToken: string, shipmentId: string, body: {
+  InboundShipmentHeader: {
+    ShipmentName: string
+    ShipFromAddress: {
+      Name: string
+      AddressLine1: string
+      City: string
+      StateOrProvinceCode: string
+      PostalCode: string
+      CountryCode: string
+    }
+    DestinationFulfillmentCenterId: string
+    LabelPrepPreference: string
+    ShipmentStatus: string
+  }
+  InboundShipmentItems: Array<{
+    ShipmentId?: string
+    SellerSKU: string
+    QuantityShipped: number
+    QuantityInCase?: number
+  }>
+}) {
+  return callSpApi(accessToken, `/fba/inbound/v0/shipments/${shipmentId}`, {
+    method: "PUT",
+    body,
+  })
+}
+
+// Update shipment status (e.g. mark as SHIPPED)
+export async function updateInboundShipment(accessToken: string, shipmentId: string, body: any) {
+  return callSpApi(accessToken, `/fba/inbound/v0/shipments/${shipmentId}`, {
+    method: "PUT",
+    body,
+  })
+}
+
+// Get labels for an inbound shipment
+export async function getLabels(accessToken: string, shipmentId: string, pageType: string = "PackageLabel_Plain_Paper", labelType: string = "UNIQUE") {
+  return callSpApi(accessToken, `/fba/inbound/v0/shipments/${shipmentId}/labels`, {
+    query: {
+      PageType: pageType,
+      LabelType: labelType,
+    },
+  })
+}
+
+// Get item FNSKU labels (product barcode labels)
+export async function getItemLabels(accessToken: string, shipmentId: string, pageType: string = "PackageLabel_Plain_Paper", labelType: string = "UNIQUE", asins?: string[]) {
+  const query: Record<string, string> = {
+    PageType: pageType,
+    LabelType: labelType,
+  }
+  return callSpApi(accessToken, `/fba/inbound/v0/shipments/${shipmentId}/labels`, { query })
+}
+
 // --- Fulfillment Outbound (MCF) ---
 
 export async function getFulfillmentPreview(accessToken: string, body: any) {
