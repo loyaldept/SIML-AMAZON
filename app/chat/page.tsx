@@ -196,8 +196,7 @@ export default function ChatPage() {
                   </div>
                   <p className="text-sm leading-relaxed">{chatError}</p>
                   <p className="text-xs text-red-500 mt-2">
-                    To set up the AI chat, add your <strong>OPENAI_API_KEY</strong> in your Vercel project&apos;s Environment Variables (Settings &gt; Environment Variables). Get a key at{" "}
-                    <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" className="underline">platform.openai.com/api-keys</a>.
+                    If this error persists, check that the Gemini API key is configured correctly in your environment settings.
                   </p>
                 </div>
               </div>

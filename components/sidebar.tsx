@@ -44,6 +44,24 @@ export function Sidebar() {
   }, [])
 
   const [connecting, setConnecting] = useState("")
+  const [syncing, setSyncing] = useState(false)
+
+  const handleSync = async () => {
+    setSyncing(true)
+    try {
+      // Run sync calls in parallel - dashboard, inventory, orders
+      await Promise.allSettled([
+        fetch("/api/amazon/dashboard"),
+        fetch("/api/amazon/inventory"),
+      ])
+      // Reload the current page to reflect updated data
+      router.refresh()
+      window.location.reload()
+    } catch {
+      // Silently handle - the individual pages will show errors
+    }
+    setSyncing(false)
+  }
 
   const handleConnect = async (channel: string) => {
     if (channel === "Amazon") {
@@ -96,9 +114,14 @@ export function Sidebar() {
             <span>{t("create_listing")}</span>
           </Button>
         </Link>
-        <Button variant="outline" className="w-full justify-center gap-2 bg-transparent">
-          <RefreshCw className="w-4 h-4" />
-          <span>{t("sync")}</span>
+        <Button
+          variant="outline"
+          className="w-full justify-center gap-2 bg-transparent"
+          onClick={handleSync}
+          disabled={syncing}
+        >
+          <RefreshCw className={cn("w-4 h-4", syncing && "animate-spin")} />
+          <span>{syncing ? "Syncing..." : t("sync")}</span>
         </Button>
       </div>
 

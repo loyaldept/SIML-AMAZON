@@ -149,6 +149,7 @@ export default function ListPage() {
 
       // Try to list via Amazon SP-API if channel is Amazon
       let spApiSuccess = false
+      let spApiIssues: string[] = []
       if (channel === "Amazon") {
         try {
           const res = await fetch("/api/amazon/listings", {
@@ -156,6 +157,7 @@ export default function ListPage() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               sku: listSku || product.asin,
+              asin: product.asin,
               productType: "PRODUCT",
               attributes: {
                 item_name: [{ value: product.title, marketplace_id: "ATVPDKIKX0DER" }],
@@ -171,47 +173,56 @@ export default function ListPage() {
               },
             }),
           })
-          spApiSuccess = res.ok
+          const resData = await res.json()
+          spApiSuccess = res.ok && resData.listingStatus !== "error"
+          if (resData.issues?.length > 0) {
+            spApiIssues = resData.issues.map((i: any) => i.message)
+          }
+          // API route handles DB writes for Amazon, so skip local insert below
         } catch {
           // SP-API not connected or failed - continue with local save
         }
       }
 
-      // Save to inventory (local DB)
-      await supabase.from("inventory").upsert({
-        user_id: user.id,
-        asin: product.asin,
-        sku: listSku || product.asin,
-        title: product.title,
-        image_url: product.imageUrl,
-        quantity: Number.parseInt(listQuantity) || 1,
-        price: Number.parseFloat(listPrice),
-        cost: 0,
-        channel,
-        status: "active",
-      }, { onConflict: "user_id,asin" })
+      // For non-Amazon channels OR if SP-API failed, save locally
+      if (channel !== "Amazon" || !spApiSuccess) {
+        // Save to inventory (local DB)
+        await supabase.from("inventory").upsert({
+          user_id: user.id,
+          asin: product.asin,
+          sku: listSku || product.asin,
+          title: product.title,
+          image_url: product.imageUrl,
+          quantity: Number.parseInt(listQuantity) || 1,
+          price: Number.parseFloat(listPrice),
+          cost: 0,
+          channel,
+          status: "active",
+        }, { onConflict: "user_id,asin" })
 
-      // Save listing
-      await supabase.from("listings").insert({
-        user_id: user.id,
-        title: product.title,
-        asin: product.asin,
-        sku: listSku || product.asin,
-        price: Number.parseFloat(listPrice),
-        quantity: Number.parseInt(listQuantity) || 1,
-        condition: selectedCondition,
-        channel,
-        status: spApiSuccess ? "active" : "active",
-        image_url: product.imageUrl,
-      })
+        // Save listing only for non-Amazon (Amazon listings saved by API route)
+        if (channel !== "Amazon") {
+          await supabase.from("listings").insert({
+            user_id: user.id,
+            title: product.title,
+            asin: product.asin,
+            sku: listSku || product.asin,
+            price: Number.parseFloat(listPrice),
+            quantity: Number.parseInt(listQuantity) || 1,
+            condition: selectedCondition,
+            channel,
+            status: "active",
+            image_url: product.imageUrl,
+          })
 
-      // Create notification
-      await supabase.from("notifications").insert({
-        user_id: user.id,
-        type: "listing",
-        title: `Listed on ${channel}`,
-        message: `"${product.title}" listed at $${listPrice} on ${channel}${spApiSuccess ? " (via SP-API)" : ""}`,
-      })
+          await supabase.from("notifications").insert({
+            user_id: user.id,
+            type: "listing",
+            title: `Listed on ${channel}`,
+            message: `"${product.title}" listed at $${listPrice} on ${channel}`,
+          })
+        }
+      }
 
       // Delay to show progress
       await new Promise((r) => setTimeout(r, 600))
@@ -246,13 +257,15 @@ export default function ListPage() {
       const sku = manualSku || manualAsin || `MANUAL-${Date.now()}`
       const price = parseFloat(manualPrice) || 0
 
+      let amazonHandled = false
       if (channel === "Amazon" && manualAsin) {
         try {
-          await fetch("/api/amazon/listings", {
+          const res = await fetch("/api/amazon/listings", {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               sku,
+              asin: manualAsin,
               productType: "PRODUCT",
               attributes: {
                 item_name: [{ value: manualTitle, marketplace_id: "ATVPDKIKX0DER" }],
@@ -268,9 +281,11 @@ export default function ListPage() {
               },
             }),
           })
+          amazonHandled = res.ok
         } catch {}
       }
 
+      // Save inventory locally
       await supabase.from("inventory").upsert({
         user_id: user.id,
         asin: manualAsin || sku,
@@ -282,17 +297,20 @@ export default function ListPage() {
         status: "active",
       }, { onConflict: "user_id,asin" })
 
-      await supabase.from("listings").insert({
-        user_id: user.id,
-        title: manualTitle,
-        asin: manualAsin || "",
-        sku,
-        price,
-        quantity: parseInt(manualQuantity) || 1,
-        condition: manualCondition,
-        channel,
-        status: "active",
-      })
+      // Only insert listing locally for non-Amazon or if Amazon API failed
+      if (channel !== "Amazon" || !amazonHandled) {
+        await supabase.from("listings").insert({
+          user_id: user.id,
+          title: manualTitle,
+          asin: manualAsin || "",
+          sku,
+          price,
+          quantity: parseInt(manualQuantity) || 1,
+          condition: manualCondition,
+          channel,
+          status: "active",
+        })
+      }
     }
 
     await loadListings()
@@ -374,12 +392,14 @@ export default function ListPage() {
           const sku = csvSku || data.asin
 
           // Try listing via SP-API
+          let csvSpApiOk = false
           try {
-            await fetch("/api/amazon/listings", {
+            const spRes = await fetch("/api/amazon/listings", {
               method: "PUT",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 sku,
+                asin: data.asin,
                 productType: "PRODUCT",
                 attributes: {
                   item_name: [{ value: title, marketplace_id: "ATVPDKIKX0DER" }],
@@ -395,11 +415,12 @@ export default function ListPage() {
                 },
               }),
             })
+            csvSpApiOk = spRes.ok
           } catch {
             // SP-API listing failed - continue with local save
           }
 
-          // Save to DB
+          // Save inventory
           await supabase.from("inventory").upsert({
             user_id: user.id,
             asin: data.asin,
@@ -412,18 +433,21 @@ export default function ListPage() {
             status: "active",
           }, { onConflict: "user_id,asin" })
 
-          await supabase.from("listings").insert({
-            user_id: user.id,
-            title,
-            asin: data.asin,
-            sku,
-            price,
-            quantity,
-            condition: csvCondition,
-            channel: "Amazon",
-            status: "active",
-            image_url: data.imageUrl,
-          })
+          // Only save listing locally if API didn't handle it
+          if (!csvSpApiOk) {
+            await supabase.from("listings").insert({
+              user_id: user.id,
+              title,
+              asin: data.asin,
+              sku,
+              price,
+              quantity,
+              condition: csvCondition,
+              channel: "Amazon",
+              status: "active",
+              image_url: data.imageUrl,
+            })
+          }
 
           results[i] = { identifier, status: "success", title }
         } catch (e: any) {
