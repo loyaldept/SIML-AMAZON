@@ -457,31 +457,41 @@ function DashboardContent() {
                   <span className="text-xs text-stone-400 font-medium">{orders.length} orders</span>
                 </div>
                 <div className="space-y-2">
-                  {orders.slice(0, 8).map((order: any) => (
-                    <div key={order.AmazonOrderId} className="flex items-center justify-between py-2.5 border-b border-stone-100 last:border-0">
-                      <div>
-                        <div className="text-sm font-medium text-stone-900">{order.AmazonOrderId}</div>
-                        <div className="text-xs text-stone-500">
-                          {new Date(order.PurchaseDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
-                          {" "}
-                          &middot; {(order.NumberOfItemsShipped || 0) + (order.NumberOfItemsUnshipped || 0)} item(s)
+                  {orders.slice(0, 8).map((order: any) => {
+                    // Handle both SP-API PascalCase and Supabase snake_case formats
+                    const orderId = order.AmazonOrderId || order.amazon_order_id
+                    const purchaseDate = order.PurchaseDate || order.purchase_date || order.order_date
+                    const itemsCount = order.items_count ?? ((order.NumberOfItemsShipped || 0) + (order.NumberOfItemsUnshipped || 0))
+                    const totalAmount = order.OrderTotal?.Amount ? parseFloat(order.OrderTotal.Amount) : (order.total_amount ? parseFloat(order.total_amount) : null)
+                    const orderStatus = order.OrderStatus || order.status
+
+                    return (
+                      <div key={orderId} className="flex items-center justify-between py-2.5 border-b border-stone-100 last:border-0">
+                        <div>
+                          <div className="text-sm font-medium text-stone-900">{orderId}</div>
+                          <div className="text-xs text-stone-500">
+                            {purchaseDate ? new Date(purchaseDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "--"}
+                            {" "}
+                            &middot; {itemsCount} item(s)
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-sm font-semibold text-stone-900">
+                            {totalAmount != null ? `$${totalAmount.toFixed(2)}` : "--"}
+                          </div>
+                          <span className={cn(
+                            "text-[10px] font-medium px-1.5 py-0.5 rounded",
+                            orderStatus === "Shipped" ? "text-emerald-700 bg-emerald-50" :
+                            (orderStatus === "Unshipped" || orderStatus === "Pending") ? "text-amber-700 bg-amber-50" :
+                            orderStatus === "Canceled" ? "text-red-700 bg-red-50" :
+                            "text-stone-600 bg-stone-100"
+                          )}>
+                            {orderStatus}
+                          </span>
                         </div>
                       </div>
-                      <div className="text-right">
-                        <div className="text-sm font-semibold text-stone-900">
-                          {order.OrderTotal ? `$${parseFloat(order.OrderTotal.Amount).toFixed(2)}` : "--"}
-                        </div>
-                        <span className={cn(
-                          "text-[10px] font-medium px-1.5 py-0.5 rounded",
-                          order.OrderStatus === "Shipped" ? "text-emerald-700 bg-emerald-50" :
-                          order.OrderStatus === "Unshipped" ? "text-amber-700 bg-amber-50" :
-                          "text-stone-600 bg-stone-100"
-                        )}>
-                          {order.OrderStatus}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               </div>
             )}

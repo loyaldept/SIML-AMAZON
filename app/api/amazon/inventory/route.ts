@@ -39,12 +39,14 @@ export async function GET() {
         if (Array.isArray(prices)) {
           for (const p of prices) {
             const asin = p.ASIN || p.asin
-            // Get the lowest offer price or the listing price
-            const offers = p.Product?.Offers || []
-            const buyingPrice = p.Product?.Offers?.[0]?.BuyingPrice?.ListingPrice
-            const listingPrice = p.Product?.Offers?.[0]?.ListingPrice
-            const regularPrice = p.Product?.Offers?.[0]?.RegularPrice
-            const price = buyingPrice || listingPrice || regularPrice
+            if (p.status === "ClientError" || p.status === "ServerError") continue
+            // SP-API getMyPrice response: Product.Offers[].BuyingPrice has LandedPrice, ListingPrice, Shipping
+            // RegularPrice is at Product.Offers[].RegularPrice
+            const offer = p.Product?.Offers?.[0]
+            const landedPrice = offer?.BuyingPrice?.LandedPrice  // Best: includes shipping
+            const listingPrice = offer?.BuyingPrice?.ListingPrice // Your listing price
+            const regularPrice = offer?.RegularPrice
+            const price = landedPrice || listingPrice || regularPrice
             if (asin && price) {
               priceMap[asin] = {
                 price: parseFloat(price.Amount || "0"),
