@@ -205,7 +205,9 @@ export default function ShipmentsPage() {
 
   const handlePrintLabels = async (shipmentId: string) => {
     setLabelLoading(true)
+    setError("")
     try {
+      // Try SP-API labels (for shipments that have items)
       const res = await fetch("/api/amazon/fulfillment", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -218,14 +220,56 @@ export default function ShipmentsPage() {
       })
 
       const data = await res.json()
+
+      if (data.error) {
+        // SP-API labels failed - fall back to local FNSKU label generation
+        if (shipmentItems.length > 0) {
+          const labelRes = await fetch("/api/amazon/labels", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              items: shipmentItems.map(si => ({
+                sku: si.SellerSKU,
+                fnsku: si.FulfillmentNetworkSKU || si.SellerSKU,
+                title: si.SellerSKU,
+                condition: "New",
+              })),
+              pageType: "PackageLabel_Plain_Paper",
+            }),
+          })
+          const labelData = await labelRes.json()
+          if (labelData.html) {
+            const blob = new Blob([labelData.html], { type: "text/html" })
+            const url = URL.createObjectURL(blob)
+            const w = window.open(url, "_blank")
+            if (!w) {
+              // Fallback: hidden iframe print
+              const iframe = document.createElement("iframe")
+              iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0"
+              document.body.appendChild(iframe)
+              const doc = iframe.contentDocument || iframe.contentWindow?.document
+              if (doc) { doc.open(); doc.write(labelData.html); doc.close() }
+              setTimeout(() => { iframe.contentWindow?.print(); setTimeout(() => document.body.removeChild(iframe), 2000) }, 500)
+            }
+            setTimeout(() => URL.revokeObjectURL(url), 60000)
+          } else {
+            setError("Could not generate labels. Try clicking 'Details' first to load items.")
+          }
+        } else {
+          setError("Click 'Details' on the shipment first to load items, then try printing labels again.")
+        }
+        setLabelLoading(false)
+        return
+      }
+
       const pdfUrl = data?.payload?.DownloadURL || data?.DownloadURL
       if (pdfUrl) {
         window.open(pdfUrl, "_blank")
       } else {
-        setError("No label download URL returned. The shipment may need items first.")
+        setError("No label URL from Amazon. Click 'Details' first, then try again.")
       }
     } catch (e: any) {
-      setError(e.message)
+      setError(e.message || "Failed to print labels")
     }
     setLabelLoading(false)
   }

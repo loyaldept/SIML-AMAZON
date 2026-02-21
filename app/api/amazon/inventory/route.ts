@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
-import { getAmazonToken, getAllFbaInventory, getMyPrice, getCatalogItem } from "@/lib/amazon-sp-api"
+import { getAmazonToken, getAllFbaInventory, getMyPrice, getCompetitivePricing, getCatalogItem } from "@/lib/amazon-sp-api"
 
 export const maxDuration = 60
 
@@ -40,23 +40,51 @@ export async function GET() {
           for (const p of prices) {
             const asin = p.ASIN || p.asin
             if (p.status === "ClientError" || p.status === "ServerError") continue
-            // SP-API getMyPrice response: Product.Offers[].BuyingPrice has LandedPrice, ListingPrice, Shipping
-            // RegularPrice is at Product.Offers[].RegularPrice
             const offer = p.Product?.Offers?.[0]
-            const landedPrice = offer?.BuyingPrice?.LandedPrice  // Best: includes shipping
-            const listingPrice = offer?.BuyingPrice?.ListingPrice // Your listing price
+            const landedPrice = offer?.BuyingPrice?.LandedPrice
+            const listingPrice = offer?.BuyingPrice?.ListingPrice
             const regularPrice = offer?.RegularPrice
             const price = landedPrice || listingPrice || regularPrice
             if (asin && price) {
               priceMap[asin] = {
-                price: parseFloat(price.Amount || "0"),
+                price: parseFloat(String(price.Amount || "0")),
                 currency: price.CurrencyCode || "USD",
               }
             }
           }
         }
       } catch (e: any) {
-        console.log("[v0] Price fetch batch error:", e?.message)
+        console.log("[Inventory] getMyPrice batch error:", e?.message)
+      }
+    }
+
+    // 2b. For ASINs still missing prices, try competitive pricing as fallback
+    const missingPriceAsins = allAsins.filter(a => !priceMap[a])
+    if (missingPriceAsins.length > 0) {
+      for (let i = 0; i < missingPriceAsins.length; i += 20) {
+        const batch = missingPriceAsins.slice(i, i + 20)
+        try {
+          const compData: any = await getCompetitivePricing(token, marketplaceId, batch)
+          const items = compData?.payload || compData || []
+          if (Array.isArray(items)) {
+            for (const item of items) {
+              const asin = item.ASIN || item.asin
+              if (item.status === "ClientError" || item.status === "ServerError") continue
+              const competitivePrices = item.Product?.CompetitivePricing?.CompetitivePrices || []
+              // CompetitivePriceId "1" = New Buy Box price
+              const buyBoxPrice = competitivePrices.find((cp: any) => cp.CompetitivePriceId === "1")
+              const price = buyBoxPrice?.Price?.LandedPrice || buyBoxPrice?.Price?.ListingPrice
+              if (asin && price) {
+                priceMap[asin] = {
+                  price: parseFloat(String(price.Amount || "0")),
+                  currency: price.CurrencyCode || "USD",
+                }
+              }
+            }
+          }
+        } catch (e: any) {
+          console.log("[Inventory] competitive pricing fallback error:", e?.message)
+        }
       }
     }
 
@@ -94,7 +122,7 @@ export async function GET() {
         updated_at: new Date().toISOString(),
       }
 
-      // Only set price if we got one from the API
+      // Only set price if we got one from any API
       if (priceInfo) {
         upsertData.price = priceInfo.price
       }
@@ -125,7 +153,7 @@ export async function GET() {
       imagesFound: Object.keys(imageMap).length,
     })
   } catch (error: any) {
-    console.error("[v0] Inventory API error:", error?.message)
+    console.error("[Inventory] API error:", error?.message)
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 }

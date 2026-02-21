@@ -3,12 +3,14 @@ import { createClient } from "@/lib/supabase/server"
 import {
   getAmazonToken,
   getSellerInfo,
-  getOrders,
+  getAllOrders,
   getAllFbaInventory,
   getOrderMetrics,
+  getMyPrice,
+  getCompetitivePricing,
 } from "@/lib/amazon-sp-api"
 
-export const maxDuration = 45
+export const maxDuration = 55
 
 export async function GET(request: Request) {
   const supabase = await createClient()
@@ -42,18 +44,18 @@ export async function GET(request: Request) {
     errors: [],
   }
 
-  // Time periods for fetching
+  // Time periods for fetching - use 120 days to ensure complete coverage
   const now = new Date()
-  const ninetyDaysAgo = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000).toISOString()
-  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString()
+  const fetchSince = new Date(now.getTime() - 120 * 24 * 60 * 60 * 1000).toISOString()
 
   // Build Sales API interval for last 90 days (covers 7d, 30d, and 90d views)
+  const ninetyDaysAgo = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000).toISOString()
   const salesInterval = `${ninetyDaysAgo}--${now.toISOString()}`
 
-  // Run all SP-API calls in parallel
+  // Run all SP-API calls in parallel - using getAllOrders with pagination
   const [sellerResult, ordersResult, inventoryResult, salesResult] = await Promise.allSettled([
     getSellerInfo(accessToken),
-    getOrders(accessToken, marketplaceIds, ninetyDaysAgo),
+    getAllOrders(accessToken, marketplaceIds, fetchSince),
     getAllFbaInventory(accessToken, marketplaceIds),
     getOrderMetrics(accessToken, marketplaceIds, salesInterval, "Day").catch(() => null),
   ])
@@ -66,10 +68,9 @@ export async function GET(request: Request) {
     result.participations = []
   }
 
-  // 2. Orders - parse all statuses
+  // 2. Orders - getAllOrders returns a flat array (already paginated)
   if (ordersResult.status === "fulfilled") {
-    const ordersPayload = ordersResult.value?.payload || ordersResult.value || {}
-    const orders = ordersPayload?.Orders || ordersPayload?.orders || []
+    const orders = ordersResult.value || []
     result.orders = orders
     result.order_count = orders.length
 
@@ -89,7 +90,7 @@ export async function GET(request: Request) {
     result.pending_orders = pendingCount
     result.canceled_orders = canceledCount
 
-    // Sync ALL orders to Supabase (not just 50)
+    // Sync ALL orders to Supabase
     const upsertPromises = orders.map((order: any) =>
       supabase.from("orders").upsert({
         user_id: user.id,
@@ -125,7 +126,7 @@ export async function GET(request: Request) {
     result.pending_orders = 0
   }
 
-  // 3. FBA Inventory (all pages)
+  // 3. FBA Inventory (all pages) + sync prices
   if (inventoryResult.status === "fulfilled") {
     const summaries = inventoryResult.value || []
     result.fba_inventory = summaries
@@ -138,20 +139,77 @@ export async function GET(request: Request) {
     }, 0)
     result.fba_total_skus = summaries.length
 
-    // Sync FBA inventory to Supabase inventory table
-    const invUpserts = summaries.map((item: any) =>
-      supabase.from("inventory").upsert({
+    // Fetch prices for inventory items (batch of 20)
+    const allAsins = [...new Set(summaries.map((s: any) => s.asin).filter(Boolean))]
+    const priceMap: Record<string, number> = {}
+
+    for (let i = 0; i < allAsins.length; i += 20) {
+      const batch = allAsins.slice(i, i + 20)
+      try {
+        const priceData: any = await getMyPrice(accessToken, marketplaceId, batch)
+        const prices = priceData?.payload || priceData || []
+        if (Array.isArray(prices)) {
+          for (const p of prices) {
+            const asin = p.ASIN || p.asin
+            if (p.status === "ClientError" || p.status === "ServerError") continue
+            const offer = p.Product?.Offers?.[0]
+            const price = offer?.BuyingPrice?.LandedPrice || offer?.BuyingPrice?.ListingPrice || offer?.RegularPrice
+            if (asin && price) {
+              priceMap[asin] = parseFloat(String(price.Amount || "0"))
+            }
+          }
+        }
+      } catch (e: any) {
+        console.log("[Dashboard] getMyPrice error:", e?.message)
+      }
+    }
+
+    // Fallback: competitive pricing for items still missing prices
+    const missingAsins = allAsins.filter(a => !priceMap[a])
+    if (missingAsins.length > 0) {
+      for (let i = 0; i < missingAsins.length; i += 20) {
+        const batch = missingAsins.slice(i, i + 20)
+        try {
+          const compData: any = await getCompetitivePricing(accessToken, marketplaceId, batch)
+          const items = compData?.payload || compData || []
+          if (Array.isArray(items)) {
+            for (const item of items) {
+              const asin = item.ASIN || item.asin
+              if (item.status === "ClientError" || item.status === "ServerError") continue
+              const cps = item.Product?.CompetitivePricing?.CompetitivePrices || []
+              const buyBox = cps.find((cp: any) => cp.CompetitivePriceId === "1")
+              const price = buyBox?.Price?.LandedPrice || buyBox?.Price?.ListingPrice
+              if (asin && price) {
+                priceMap[asin] = parseFloat(String(price.Amount || "0"))
+              }
+            }
+          }
+        } catch (e: any) {
+          console.log("[Dashboard] competitive pricing error:", e?.message)
+        }
+      }
+    }
+
+    // Sync FBA inventory to Supabase with prices
+    const invUpserts = summaries.map((item: any) => {
+      const qty = item.inventoryDetails?.fulfillableQuantity || item.totalQuantity || 0
+      const upsertData: any = {
         user_id: user.id,
         asin: item.asin,
         sku: item.sellerSku,
         title: item.productName || item.sellerSku || item.asin,
-        quantity: item.inventoryDetails?.fulfillableQuantity || item.totalQuantity || 0,
+        quantity: qty,
         channel: "FBA",
-        status: (item.inventoryDetails?.fulfillableQuantity || item.totalQuantity || 0) > 0 ? "active" : "out_of_stock",
+        status: qty > 0 ? "active" : "out_of_stock",
         fulfillment_channel: item.inventoryDetails ? "FBA" : "FBM",
         fnsku: item.fnSku || null,
-      }, { onConflict: "user_id,asin" })
-    )
+        updated_at: new Date().toISOString(),
+      }
+      if (priceMap[item.asin]) {
+        upsertData.price = priceMap[item.asin]
+      }
+      return supabase.from("inventory").upsert(upsertData, { onConflict: "user_id,asin" })
+    })
     await Promise.allSettled(invUpserts)
   } else {
     result.errors.push(`FBA Inventory: ${inventoryResult.reason?.message}`)
@@ -165,7 +223,6 @@ export async function GET(request: Request) {
     const payload = salesResult.value?.payload || salesResult.value || []
     result.sales_metrics = payload
   } else {
-    // Fall back: we'll build chart data from orders on the client side
     result.sales_metrics = null
     if (salesResult.status === "rejected") {
       result.errors.push(`Sales API: ${salesResult.reason?.message}`)

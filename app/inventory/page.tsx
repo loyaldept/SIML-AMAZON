@@ -180,9 +180,12 @@ function InventoryContent() {
     }
   }
 
+  const [labelError, setLabelError] = useState("")
+
   const handlePrintLabels = async () => {
     const selectedItems = filteredInventory.filter(i => selectedIds.has(i.id))
     if (selectedItems.length === 0) return
+    setLabelError("")
 
     try {
       const res = await fetch("/api/amazon/labels", {
@@ -191,7 +194,7 @@ function InventoryContent() {
         body: JSON.stringify({
           items: selectedItems.map(i => ({
             sku: i.sku,
-            fnsku: i.sku, // Use SKU as FNSKU fallback
+            fnsku: i.sku,
             title: i.title,
             condition: i.status === "active" ? "New" : "Used",
             asin: i.asin,
@@ -201,15 +204,36 @@ function InventoryContent() {
       })
 
       const data = await res.json()
-      if (data.html) {
-        const printWindow = window.open("", "_blank")
-        if (printWindow) {
-          printWindow.document.write(data.html)
-          printWindow.document.close()
-        }
+      if (data.error) {
+        setLabelError(data.error)
+        return
       }
-    } catch (e) {
-      console.log("Print labels error:", e)
+      if (data.html) {
+        // Use blob URL for reliable popup (less likely to be blocked)
+        const blob = new Blob([data.html], { type: "text/html" })
+        const url = URL.createObjectURL(blob)
+        const printWindow = window.open(url, "_blank")
+        if (!printWindow) {
+          // Fallback: inject into hidden iframe and print
+          const iframe = document.createElement("iframe")
+          iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0"
+          document.body.appendChild(iframe)
+          const doc = iframe.contentDocument || iframe.contentWindow?.document
+          if (doc) {
+            doc.open()
+            doc.write(data.html)
+            doc.close()
+            setTimeout(() => {
+              iframe.contentWindow?.print()
+              setTimeout(() => document.body.removeChild(iframe), 2000)
+            }, 500)
+          }
+        }
+        // Clean up blob URL after a delay
+        setTimeout(() => URL.revokeObjectURL(url), 60000)
+      }
+    } catch (e: any) {
+      setLabelError(e.message || "Failed to generate labels")
     }
   }
 
@@ -299,6 +323,14 @@ function InventoryContent() {
 
             {!loading && (
             <>
+            {/* Label Error */}
+            {labelError && (
+              <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-2.5 flex items-center justify-between">
+                <p className="text-xs text-red-700">{labelError}</p>
+                <button onClick={() => setLabelError("")} className="text-red-500 hover:text-red-700 text-xs">Dismiss</button>
+              </div>
+            )}
+
             {/* Bulk Actions Bar */}
             {selectedIds.size > 0 && (
               <div className="flex items-center gap-3 bg-stone-900 text-white rounded-xl px-4 py-2.5">
