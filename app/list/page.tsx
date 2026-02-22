@@ -46,6 +46,7 @@ export default function ListPage() {
   const [listQuantity, setListQuantity] = useState("1")
   const [listSku, setListSku] = useState("")
   const [selectedChannels, setSelectedChannels] = useState<string[]>(["Amazon"])
+  const [fulfillmentType, setFulfillmentType] = useState<"FBA" | "FBM">("FBA")
   const [isListing, setIsListing] = useState(false)
   const [listSuccess, setListSuccess] = useState(false)
   const [listingProgress, setListingProgress] = useState(0)
@@ -54,6 +55,7 @@ export default function ListPage() {
   const [csvProcessing, setCsvProcessing] = useState(false)
   const [csvProgress, setCsvProgress] = useState(0)
   const [csvResults, setCsvResults] = useState<Array<{ identifier: string; status: "success" | "error" | "pending"; title?: string; error?: string }>>([])
+  const [csvFulfillmentType, setCsvFulfillmentType] = useState<"FBA" | "FBM">("FBA")
   const [manualTitle, setManualTitle] = useState("")
   const [manualAsin, setManualAsin] = useState("")
   const [manualPrice, setManualPrice] = useState("")
@@ -61,6 +63,7 @@ export default function ListPage() {
   const [manualCondition, setManualCondition] = useState<"new" | "used">("new")
   const [manualSku, setManualSku] = useState("")
   const [manualChannels, setManualChannels] = useState<string[]>(["Amazon"])
+  const [manualFulfillmentType, setManualFulfillmentType] = useState<"FBA" | "FBM">("FBA")
   const [listings, setListings] = useState<any[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -167,7 +170,7 @@ export default function ListPage() {
                   marketplace_id: "ATVPDKIKX0DER",
                 }],
                 fulfillment_availability: [{
-                  fulfillment_channel_code: "DEFAULT",
+                  fulfillment_channel_code: fulfillmentType === "FBA" ? "AMAZON_NA" : "DEFAULT",
                   quantity: Number.parseInt(listQuantity) || 1,
                 }],
               },
@@ -196,7 +199,8 @@ export default function ListPage() {
           quantity: Number.parseInt(listQuantity) || 1,
           price: Number.parseFloat(listPrice),
           cost: 0,
-          channel,
+          channel: channel === "Amazon" ? fulfillmentType : channel,
+          fulfillment_channel: channel === "Amazon" ? fulfillmentType : undefined,
           status: "active",
         }, { onConflict: "user_id,asin" })
 
@@ -275,7 +279,7 @@ export default function ListPage() {
                   marketplace_id: "ATVPDKIKX0DER",
                 }],
                 fulfillment_availability: [{
-                  fulfillment_channel_code: "DEFAULT",
+                  fulfillment_channel_code: manualFulfillmentType === "FBA" ? "AMAZON_NA" : "DEFAULT",
                   quantity: parseInt(manualQuantity) || 1,
                 }],
               },
@@ -293,7 +297,8 @@ export default function ListPage() {
         title: manualTitle,
         quantity: parseInt(manualQuantity) || 1,
         price,
-        channel,
+        channel: channel === "Amazon" ? manualFulfillmentType : channel,
+        fulfillment_channel: channel === "Amazon" ? manualFulfillmentType : undefined,
         status: "active",
       }, { onConflict: "user_id,asin" })
 
@@ -409,7 +414,7 @@ export default function ListPage() {
                     marketplace_id: "ATVPDKIKX0DER",
                   }],
                   fulfillment_availability: [{
-                    fulfillment_channel_code: "DEFAULT",
+                    fulfillment_channel_code: csvFulfillmentType === "FBA" ? "AMAZON_NA" : "DEFAULT",
                     quantity,
                   }],
                 },
@@ -429,7 +434,8 @@ export default function ListPage() {
             image_url: data.imageUrl,
             quantity,
             price,
-            channel: "Amazon",
+            channel: csvFulfillmentType,
+            fulfillment_channel: csvFulfillmentType,
             status: "active",
           }, { onConflict: "user_id,asin" })
 
@@ -446,6 +452,7 @@ export default function ListPage() {
               channel: "Amazon",
               status: "active",
               image_url: data.imageUrl,
+              fulfillment_channel: csvFulfillmentType,
             })
           }
 
@@ -652,6 +659,38 @@ export default function ListPage() {
                         </button>
                       </div>
 
+                      {/* Fulfillment Type */}
+                      <div>
+                        <label className="text-[10px] text-stone-500 block mb-1">Fulfillment</label>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => setFulfillmentType("FBA")}
+                            className={cn(
+                              "flex-1 py-1.5 rounded-md text-xs font-medium border transition-all",
+                              fulfillmentType === "FBA"
+                                ? "bg-stone-900 text-white border-stone-900"
+                                : "bg-white text-stone-600 border-stone-200 hover:border-stone-300"
+                            )}
+                          >
+                            FBA
+                          </button>
+                          <button
+                            onClick={() => setFulfillmentType("FBM")}
+                            className={cn(
+                              "flex-1 py-1.5 rounded-md text-xs font-medium border transition-all",
+                              fulfillmentType === "FBM"
+                                ? "bg-stone-900 text-white border-stone-900"
+                                : "bg-white text-stone-600 border-stone-200 hover:border-stone-300"
+                            )}
+                          >
+                            FBM
+                          </button>
+                        </div>
+                        <p className="text-[9px] text-stone-400 mt-1">
+                          {fulfillmentType === "FBA" ? "Fulfillment by Amazon — Amazon ships for you" : "Fulfillment by Merchant — You handle shipping"}
+                        </p>
+                      </div>
+
                       {/* Channels - multi-select */}
                       <div>
                         <label className="text-[10px] text-stone-500 block mb-1">Channels</label>
@@ -802,13 +841,45 @@ export default function ListPage() {
                       </div>
 
                       {!csvProcessing && csvResults.length === 0 && (
-                        <button
-                          onClick={handleProcessCsv}
-                          className="w-full py-2.5 rounded-lg text-sm font-medium bg-stone-900 text-white hover:bg-stone-800 transition-colors flex items-center justify-center gap-2"
-                        >
-                          <ShoppingCart className="w-4 h-4" />
-                          Process & List Products via Keepa
-                        </button>
+                        <div className="space-y-3">
+                          <div>
+                            <label className="text-xs text-stone-500 block mb-1.5">Fulfillment Type</label>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => setCsvFulfillmentType("FBA")}
+                                className={cn(
+                                  "flex-1 py-2 rounded-lg text-xs font-medium border transition-all",
+                                  csvFulfillmentType === "FBA"
+                                    ? "bg-stone-900 text-white border-stone-900"
+                                    : "bg-white text-stone-600 border-stone-200 hover:border-stone-300"
+                                )}
+                              >
+                                FBA
+                              </button>
+                              <button
+                                onClick={() => setCsvFulfillmentType("FBM")}
+                                className={cn(
+                                  "flex-1 py-2 rounded-lg text-xs font-medium border transition-all",
+                                  csvFulfillmentType === "FBM"
+                                    ? "bg-stone-900 text-white border-stone-900"
+                                    : "bg-white text-stone-600 border-stone-200 hover:border-stone-300"
+                                )}
+                              >
+                                FBM
+                              </button>
+                            </div>
+                            <p className="text-[10px] text-stone-400 mt-1">
+                              {csvFulfillmentType === "FBA" ? "Fulfillment by Amazon — Amazon ships for you" : "Fulfillment by Merchant — You handle shipping"}
+                            </p>
+                          </div>
+                          <button
+                            onClick={handleProcessCsv}
+                            className="w-full py-2.5 rounded-lg text-sm font-medium bg-stone-900 text-white hover:bg-stone-800 transition-colors flex items-center justify-center gap-2"
+                          >
+                            <ShoppingCart className="w-4 h-4" />
+                            Process & List Products via Keepa
+                          </button>
+                        </div>
                       )}
 
                       {csvProcessing && (
@@ -951,6 +1022,36 @@ B08N5WRWNW, , new, 29.99, 10,
                       </div>
                     </div>
                     <div>
+                      <label className="text-xs text-stone-500 block mb-1.5">Fulfillment</label>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => setManualFulfillmentType("FBA")}
+                          className={cn(
+                            "flex-1 py-2 rounded-lg text-xs font-medium border transition-all",
+                            manualFulfillmentType === "FBA"
+                              ? "bg-stone-900 text-white border-stone-900"
+                              : "bg-white text-stone-600 border-stone-200 hover:border-stone-300"
+                          )}
+                        >
+                          FBA
+                        </button>
+                        <button
+                          onClick={() => setManualFulfillmentType("FBM")}
+                          className={cn(
+                            "flex-1 py-2 rounded-lg text-xs font-medium border transition-all",
+                            manualFulfillmentType === "FBM"
+                              ? "bg-stone-900 text-white border-stone-900"
+                              : "bg-white text-stone-600 border-stone-200 hover:border-stone-300"
+                          )}
+                        >
+                          FBM
+                        </button>
+                      </div>
+                      <p className="text-[10px] text-stone-400 mt-1">
+                        {manualFulfillmentType === "FBA" ? "Fulfillment by Amazon — Amazon ships for you" : "Fulfillment by Merchant — You handle shipping"}
+                      </p>
+                    </div>
+                    <div>
                       <label className="text-xs text-stone-500 block mb-1.5">Channels</label>
                       <div className="flex gap-2">
                         {["Amazon", "eBay", "Shopify"].map((ch) => (
@@ -1015,7 +1116,7 @@ B08N5WRWNW, , new, 29.99, 10,
                         )}
                         <div className="min-w-0">
                           <p className="text-xs font-medium text-stone-900 truncate">{listing.title}</p>
-                          <p className="text-[10px] text-stone-500">{listing.sku} &middot; ${Number(listing.price).toFixed(2)} &middot; {listing.channel}</p>
+                          <p className="text-[10px] text-stone-500">{listing.sku} &middot; ${Number(listing.price).toFixed(2)} &middot; {listing.channel}{listing.fulfillment_channel ? ` (${listing.fulfillment_channel})` : ""}</p>
                         </div>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
