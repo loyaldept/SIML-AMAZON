@@ -115,6 +115,8 @@ export async function PUT(request: NextRequest) {
     const price = attributes?.purchasable_offer?.[0]?.our_price?.[0]?.schedule?.[0]?.value_with_tax || 0
     const quantity = attributes?.fulfillment_availability?.[0]?.quantity || 1
     const condition = attributes?.condition_type?.[0]?.value || "new_new"
+    const fulfillmentCode = attributes?.fulfillment_availability?.[0]?.fulfillment_channel_code || "DEFAULT"
+    const fulfillmentChannel = fulfillmentCode === "AMAZON_NA" ? "FBA" : "FBM"
 
     const { error: upsertError } = await supabase.from("listings").upsert({
       user_id: user.id,
@@ -126,6 +128,7 @@ export async function PUT(request: NextRequest) {
       channel: "Amazon",
       status: listingStatus,
       condition,
+      fulfillment_channel: fulfillmentChannel,
     }, { onConflict: "user_id,sku,channel" })
 
     // If upsert on composite key fails, try simple insert
@@ -140,6 +143,7 @@ export async function PUT(request: NextRequest) {
         channel: "Amazon",
         status: listingStatus,
         condition,
+        fulfillment_channel: fulfillmentChannel,
       })
     }
 
@@ -147,10 +151,10 @@ export async function PUT(request: NextRequest) {
     await supabase.from("notifications").insert({
       user_id: user.id,
       type: "listing",
-      title: hasErrors ? "Listing submitted with issues" : "Listed on Amazon",
+      title: hasErrors ? "Listing submitted with issues" : `Listed on Amazon (${fulfillmentChannel})`,
       message: hasErrors
         ? `SKU "${sku}" submitted but has issues: ${issues.map((i: any) => i.message).join("; ")}`
-        : `SKU "${sku}" has been listed on Amazon marketplace.`,
+        : `SKU "${sku}" has been listed on Amazon marketplace as ${fulfillmentChannel}.`,
     })
 
     return NextResponse.json({
