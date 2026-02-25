@@ -7,7 +7,14 @@ import {
   getInboundShipmentItems,
   createInboundShipmentPlan,
   createInboundShipment,
+  updateInboundShipment,
   getLabels,
+  estimateTransport,
+  getTransportDetails,
+  confirmTransport,
+  voidTransport,
+  putTransportDetails,
+  getPrepInstructions,
 } from "@/lib/amazon-sp-api"
 
 export const maxDuration = 60
@@ -114,7 +121,68 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(labels)
     }
 
-    return NextResponse.json({ error: "Invalid action. Use: createPlan, createShipment, getLabels" }, { status: 400 })
+    // Update shipment status (e.g. mark as SHIPPED)
+    if (action === "updateStatus") {
+      const result = await updateInboundShipment(token, body.shipmentId, {
+        InboundShipmentHeader: body.header,
+        InboundShipmentItems: body.items,
+      })
+
+      await supabase.from("notifications").insert({
+        user_id: user.id,
+        type: "shipment",
+        title: "Shipment Status Updated",
+        message: `Shipment ${body.shipmentId} marked as ${body.header?.ShipmentStatus || "updated"}`,
+      })
+
+      return NextResponse.json(result)
+    }
+
+    // Get transport details for a shipment
+    if (action === "getTransport") {
+      const result = await getTransportDetails(token, body.shipmentId)
+      return NextResponse.json(result)
+    }
+
+    // Set transport details (Amazon-partnered small parcel or LTL)
+    if (action === "putTransport") {
+      const result = await putTransportDetails(token, body.shipmentId, body.transportDetails)
+      return NextResponse.json(result)
+    }
+
+    // Estimate transport cost
+    if (action === "estimateTransport") {
+      const result = await estimateTransport(token, body.shipmentId)
+      return NextResponse.json(result)
+    }
+
+    // Confirm transport (accept Amazon-partnered carrier rates)
+    if (action === "confirmTransport") {
+      const result = await confirmTransport(token, body.shipmentId)
+
+      await supabase.from("notifications").insert({
+        user_id: user.id,
+        type: "shipment",
+        title: "Transport Confirmed",
+        message: `Transport for shipment ${body.shipmentId} has been confirmed`,
+      })
+
+      return NextResponse.json(result)
+    }
+
+    // Void transport (cancel before ship date)
+    if (action === "voidTransport") {
+      const result = await voidTransport(token, body.shipmentId)
+      return NextResponse.json(result)
+    }
+
+    // Get prep instructions for ASINs
+    if (action === "getPrepInstructions") {
+      const result = await getPrepInstructions(token, body.asins, body.shipToCountryCode || "US")
+      return NextResponse.json(result)
+    }
+
+    return NextResponse.json({ error: "Invalid action" }, { status: 400 })
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }

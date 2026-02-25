@@ -432,6 +432,56 @@ export async function getItemLabels(accessToken: string, shipmentId: string, pag
   return callSpApi(accessToken, `/fba/inbound/v0/shipments/${shipmentId}/labels`, { query })
 }
 
+// --- Estimate Transport for Inbound Shipment ---
+
+export async function estimateTransport(accessToken: string, shipmentId: string) {
+  return callSpApi(accessToken, `/fba/inbound/v0/shipments/${shipmentId}/transport/estimate`, {
+    method: "POST",
+  })
+}
+
+// --- Get transport details for an inbound shipment ---
+
+export async function getTransportDetails(accessToken: string, shipmentId: string) {
+  return callSpApi(accessToken, `/fba/inbound/v0/shipments/${shipmentId}/transport`)
+}
+
+// --- Confirm transport for an inbound shipment (accept Amazon-partnered carrier rates) ---
+
+export async function confirmTransport(accessToken: string, shipmentId: string) {
+  return callSpApi(accessToken, `/fba/inbound/v0/shipments/${shipmentId}/transport/confirm`, {
+    method: "POST",
+  })
+}
+
+// --- Void transport for an inbound shipment (cancel carrier before ship date) ---
+
+export async function voidTransport(accessToken: string, shipmentId: string) {
+  return callSpApi(accessToken, `/fba/inbound/v0/shipments/${shipmentId}/transport/void`, {
+    method: "POST",
+  })
+}
+
+// --- Put transport details (Small Parcel / LTL for Amazon-partnered carrier) ---
+
+export async function putTransportDetails(accessToken: string, shipmentId: string, body: any) {
+  return callSpApi(accessToken, `/fba/inbound/v0/shipments/${shipmentId}/transport`, {
+    method: "PUT",
+    body,
+  })
+}
+
+// --- Get prep instructions for a list of ASINs ---
+
+export async function getPrepInstructions(accessToken: string, asins: string[], shipToCountryCode = "US") {
+  return callSpApi(accessToken, "/fba/inbound/v0/prepInstructions", {
+    query: {
+      ShipToCountryCode: shipToCountryCode,
+      ASINList: asins.join(","),
+    },
+  })
+}
+
 // --- Fulfillment Outbound (MCF) ---
 
 export async function getFulfillmentPreview(accessToken: string, body: any) {
@@ -482,5 +532,60 @@ export async function purchaseShipment(accessToken: string, body: any) {
 export async function getTrackingInfo(accessToken: string, trackingId: string, carrierId: string) {
   return callSpApi(accessToken, `/shipping/v2/tracking`, {
     query: { trackingId, carrierId },
+  })
+}
+
+// --- Inventory Age / Stranded / Restock Reports ---
+
+export async function requestInventoryReport(accessToken: string, reportType: string, marketplaceIds: string[]) {
+  // Common reportType values:
+  //   GET_FBA_MYI_UNSUPPRESSED_INVENTORY_DATA - active FBA inventory
+  //   GET_FBA_MYI_ALL_INVENTORY_DATA - all FBA inventory
+  //   GET_RESTOCK_INVENTORY_RECOMMENDATIONS_REPORT - restock suggestions
+  //   GET_STRANDED_INVENTORY_UI_DATA - stranded inventory
+  //   GET_FBA_INVENTORY_AGED_DATA - inventory age/long-term storage fees
+  return callSpApi(accessToken, "/reports/2021-06-30/reports", {
+    method: "POST",
+    body: {
+      reportType,
+      marketplaceIds,
+    },
+  })
+}
+
+// --- Product Fees Estimate (for profitability calculations) ---
+
+export async function getMyFeesEstimate(accessToken: string, asin: string, price: number, currency = "USD", isAmazonFulfilled = true) {
+  return callSpApi(accessToken, `/products/fees/v0/items/${asin}/feesEstimate`, {
+    method: "POST",
+    body: {
+      FeesEstimateRequest: {
+        MarketplaceId: "ATVPDKIKX0DER",
+        IsAmazonFulfilled: isAmazonFulfilled,
+        PriceToEstimateFees: {
+          ListingPrice: { CurrencyCode: currency, Amount: price },
+        },
+        Identifier: `fee-est-${asin}`,
+      },
+    },
+  })
+}
+
+// --- Batch update listing quantities (for quick inventory adjustments) ---
+
+export async function patchListingsItem(
+  accessToken: string,
+  sellerId: string,
+  sku: string,
+  marketplaceIds: string[],
+  patches: Array<{ op: "replace" | "delete"; path: string; value?: any }>
+) {
+  return callSpApi(accessToken, `/listings/2021-08-01/items/${sellerId}/${encodeURIComponent(sku)}`, {
+    method: "PATCH",
+    query: { marketplaceIds: marketplaceIds.join(",") },
+    body: {
+      productType: "PRODUCT",
+      patches,
+    },
   })
 }

@@ -67,6 +67,11 @@ export default function ShipmentsPage() {
   // Labels
   const [labelLoading, setLabelLoading] = useState(false)
 
+  // Status update & transport
+  const [statusUpdating, setStatusUpdating] = useState(false)
+  const [transportInfo, setTransportInfo] = useState<any>(null)
+  const [transportLoading, setTransportLoading] = useState(false)
+
   useEffect(() => { loadData() }, [])
 
   const loadData = async () => {
@@ -272,6 +277,105 @@ export default function ShipmentsPage() {
       setError(e.message || "Failed to print labels")
     }
     setLabelLoading(false)
+  }
+
+  const handleUpdateShipmentStatus = async (shipment: InboundShipment, newStatus: string) => {
+    setStatusUpdating(true)
+    setError("")
+    try {
+      const res = await fetch("/api/amazon/fulfillment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "updateStatus",
+          shipmentId: shipment.ShipmentId,
+          header: {
+            ShipmentName: shipment.ShipmentName,
+            ShipFromAddress: shipment.ShipFromAddress || { Name: "", AddressLine1: "", City: "", StateOrProvinceCode: "", PostalCode: "", CountryCode: "US" },
+            DestinationFulfillmentCenterId: shipment.DestinationFulfillmentCenterId,
+            LabelPrepPreference: shipment.LabelPrepType || "SELLER_LABEL",
+            ShipmentStatus: newStatus,
+          },
+          items: shipmentItems.map(item => ({
+            SellerSKU: item.SellerSKU,
+            QuantityShipped: item.QuantityShipped,
+          })),
+        }),
+      })
+
+      if (!res.ok) {
+        const data = await res.json()
+        throw new Error(data.error || "Failed to update status")
+      }
+
+      // Refresh shipments list
+      await handleSync()
+      // Update local state
+      if (selectedShipment) {
+        setSelectedShipment({ ...selectedShipment, ShipmentStatus: newStatus })
+      }
+    } catch (e: any) {
+      setError(e.message)
+    }
+    setStatusUpdating(false)
+  }
+
+  const handleGetTransport = async (shipmentId: string) => {
+    setTransportLoading(true)
+    setTransportInfo(null)
+    try {
+      const res = await fetch("/api/amazon/fulfillment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "getTransport", shipmentId }),
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setTransportInfo(data?.payload?.TransportContent || data)
+      }
+    } catch (e: any) {
+      setError(e.message || "Failed to get transport info")
+    }
+    setTransportLoading(false)
+  }
+
+  const handleConfirmTransport = async (shipmentId: string) => {
+    setTransportLoading(true)
+    setError("")
+    try {
+      const res = await fetch("/api/amazon/fulfillment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "confirmTransport", shipmentId }),
+      })
+      if (!res.ok) {
+        const data = await res.json()
+        throw new Error(data.error || "Failed to confirm transport")
+      }
+    } catch (e: any) {
+      setError(e.message)
+    }
+    setTransportLoading(false)
+  }
+
+  const handleVoidTransport = async (shipmentId: string) => {
+    setTransportLoading(true)
+    setError("")
+    try {
+      const res = await fetch("/api/amazon/fulfillment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "voidTransport", shipmentId }),
+      })
+      if (!res.ok) {
+        const data = await res.json()
+        throw new Error(data.error || "Failed to void transport")
+      }
+      setTransportInfo(null)
+    } catch (e: any) {
+      setError(e.message)
+    }
+    setTransportLoading(false)
   }
 
   const statusColors: Record<string, string> = {
@@ -700,6 +804,77 @@ export default function ShipmentsPage() {
                                   </div>
                                 </div>
                               ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Status Update */}
+                        {(selectedShipment.ShipmentStatus === "WORKING" || selectedShipment.ShipmentStatus === "SHIPPED") && (
+                          <div>
+                            <h4 className="text-xs font-medium text-stone-700 mb-2">Update Status</h4>
+                            <div className="flex gap-2">
+                              {selectedShipment.ShipmentStatus === "WORKING" && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => handleUpdateShipmentStatus(selectedShipment, "SHIPPED")}
+                                  disabled={statusUpdating || shipmentItems.length === 0}
+                                  className="flex-1 gap-1.5 text-xs"
+                                >
+                                  {statusUpdating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Truck className="w-3 h-3" />}
+                                  Mark as Shipped
+                                </Button>
+                              )}
+                            </div>
+                            {shipmentItems.length === 0 && (
+                              <p className="text-[10px] text-stone-400 mt-1">Load items first via Details to update status</p>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Transport Actions */}
+                        <div>
+                          <h4 className="text-xs font-medium text-stone-700 mb-2">Transport</h4>
+                          <div className="flex gap-2 flex-wrap">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleGetTransport(selectedShipment.ShipmentId)}
+                              disabled={transportLoading}
+                              className="gap-1.5 text-xs"
+                            >
+                              {transportLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <ClipboardList className="w-3 h-3" />}
+                              Transport Info
+                            </Button>
+                            {transportInfo && (
+                              <>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => handleConfirmTransport(selectedShipment.ShipmentId)}
+                                  disabled={transportLoading}
+                                  className="gap-1.5 text-xs text-emerald-700 border-emerald-200 hover:bg-emerald-50"
+                                >
+                                  Confirm Transport
+                                </Button>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => handleVoidTransport(selectedShipment.ShipmentId)}
+                                  disabled={transportLoading}
+                                  className="gap-1.5 text-xs text-red-700 border-red-200 hover:bg-red-50"
+                                >
+                                  Void Transport
+                                </Button>
+                              </>
+                            )}
+                          </div>
+                          {transportInfo && (
+                            <div className="mt-2 bg-stone-50 rounded-lg p-2.5 text-[10px] text-stone-600">
+                              <p><span className="font-medium">Status:</span> {transportInfo.TransportResult?.TransportStatus || "N/A"}</p>
+                              {transportInfo.TransportDetails?.PartneredSmallParcelData?.PartneredEstimate && (
+                                <p><span className="font-medium">Est. Cost:</span> ${transportInfo.TransportDetails.PartneredSmallParcelData.PartneredEstimate.Amount?.Value || "N/A"}</p>
+                              )}
                             </div>
                           )}
                         </div>

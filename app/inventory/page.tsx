@@ -2,7 +2,7 @@
 
 import { useState, useEffect, Suspense } from "react"
 import Link from "next/link"
-import { Package, Search, Bell, Menu, RefreshCw, AlertTriangle, Download, Upload, ChevronDown, MoreHorizontal, ArrowUpDown, Loader2, Printer } from "lucide-react"
+import { Package, Search, Bell, Menu, RefreshCw, AlertTriangle, Download, Upload, ChevronDown, MoreHorizontal, ArrowUpDown, Loader2, Printer, Trash2, Edit3, Check, X, DollarSign } from "lucide-react"
 import { Sidebar } from "@/components/sidebar"
 import { MobileNav } from "@/components/mobile-nav"
 
@@ -181,6 +181,120 @@ function InventoryContent() {
   }
 
   const [labelError, setLabelError] = useState("")
+  const [editingItem, setEditingItem] = useState<string | null>(null)
+  const [editPrice, setEditPrice] = useState("")
+  const [editQty, setEditQty] = useState("")
+  const [editSaving, setEditSaving] = useState(false)
+  const [actionLoading, setActionLoading] = useState(false)
+  const [feeEstimate, setFeeEstimate] = useState<{ asin: string; totalFee: number; referralFee: number; fbaFee: number } | null>(null)
+
+  const startEdit = (item: InventoryItem) => {
+    setEditingItem(item.id)
+    setEditPrice(item.price.toFixed(2))
+    setEditQty(String(item.quantity))
+    setFeeEstimate(null)
+  }
+
+  const cancelEdit = () => {
+    setEditingItem(null)
+    setEditPrice("")
+    setEditQty("")
+    setFeeEstimate(null)
+  }
+
+  const saveEdit = async (item: InventoryItem) => {
+    setEditSaving(true)
+    try {
+      const newPrice = parseFloat(editPrice)
+      const newQty = parseInt(editQty)
+      if (isNaN(newPrice) || isNaN(newQty)) { setEditSaving(false); return }
+
+      // Update price via SP-API if changed
+      if (newPrice !== item.price) {
+        await fetch("/api/amazon/inventory/manage", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "updatePrice", sku: item.sku, price: newPrice }),
+        })
+      }
+
+      // Update quantity via SP-API if changed
+      if (newQty !== item.quantity) {
+        await fetch("/api/amazon/inventory/manage", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "updateQuantity", sku: item.sku, quantity: newQty, fulfillmentChannel: item.channel }),
+        })
+      }
+
+      // Update local state immediately
+      setInventory(prev => prev.map(i =>
+        i.id === item.id ? { ...i, price: newPrice, quantity: newQty, status: newQty > 0 ? "active" : "out_of_stock" } : i
+      ))
+      setEditingItem(null)
+    } catch {
+      setLabelError("Failed to save changes")
+    }
+    setEditSaving(false)
+  }
+
+  const handleBulkDelete = async () => {
+    if (selectedIds.size === 0) return
+    setActionLoading(true)
+    try {
+      const res = await fetch("/api/amazon/inventory/manage", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "bulkDelete", ids: Array.from(selectedIds) }),
+      })
+      if (res.ok) {
+        setInventory(prev => prev.filter(i => !selectedIds.has(i.id)))
+        setSelectedIds(new Set())
+      }
+    } catch {
+      setLabelError("Failed to delete items")
+    }
+    setActionLoading(false)
+  }
+
+  const handleBulkStatusChange = async (status: string) => {
+    if (selectedIds.size === 0) return
+    setActionLoading(true)
+    try {
+      const res = await fetch("/api/amazon/inventory/manage", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "bulkUpdateStatus", ids: Array.from(selectedIds), status }),
+      })
+      if (res.ok) {
+        setInventory(prev => prev.map(i => selectedIds.has(i.id) ? { ...i, status } : i))
+        setSelectedIds(new Set())
+      }
+    } catch {
+      setLabelError("Failed to update status")
+    }
+    setActionLoading(false)
+  }
+
+  const handleGetFees = async (asin: string, price: number) => {
+    try {
+      const res = await fetch("/api/amazon/inventory/manage", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "getFees", asin, price }),
+      })
+      if (res.ok) {
+        const data = await res.json()
+        const feeDetail = data?.payload?.FeesEstimateResult?.FeesEstimate?.FeeDetailList || []
+        const referral = feeDetail.find((f: any) => f.FeeType === "ReferralFee")?.FeeAmount?.Amount || 0
+        const fba = feeDetail.find((f: any) => f.FeeType === "FBAFees")?.FeeAmount?.Amount || 0
+        const total = data?.payload?.FeesEstimateResult?.FeesEstimate?.TotalFeesEstimate?.Amount || 0
+        setFeeEstimate({ asin, totalFee: parseFloat(total), referralFee: parseFloat(referral), fbaFee: parseFloat(fba) })
+      }
+    } catch {
+      // silently fail - fee estimate is optional
+    }
+  }
 
   const handlePrintLabels = async () => {
     const selectedItems = filteredInventory.filter(i => selectedIds.has(i.id))
@@ -333,14 +447,16 @@ function InventoryContent() {
 
             {/* Bulk Actions Bar */}
             {selectedIds.size > 0 && (
-              <div className="flex items-center gap-3 bg-stone-900 text-white rounded-xl px-4 py-2.5">
+              <div className="flex items-center gap-3 bg-stone-900 text-white rounded-xl px-4 py-2.5 flex-wrap">
                 <span className="text-xs font-medium">{selectedIds.size} selected</span>
                 <div className="h-4 w-px bg-white/20" />
-                <button className="text-xs hover:text-white/80 transition-colors">Edit Prices</button>
-                <button className="text-xs hover:text-white/80 transition-colors">Change Status</button>
-                <button className="text-xs hover:text-white/80 transition-colors">Export Selected</button>
+                <button onClick={() => handleBulkStatusChange("active")} disabled={actionLoading} className="text-xs hover:text-white/80 transition-colors">Set Active</button>
+                <button onClick={() => handleBulkStatusChange("inactive")} disabled={actionLoading} className="text-xs hover:text-white/80 transition-colors">Set Inactive</button>
                 <button onClick={handlePrintLabels} className="text-xs hover:text-white/80 transition-colors flex items-center gap-1"><Printer className="w-3 h-3" />Print Labels</button>
-                <button className="text-xs text-red-300 hover:text-red-200 transition-colors">Delete</button>
+                <button onClick={handleBulkDelete} disabled={actionLoading} className="text-xs text-red-300 hover:text-red-200 transition-colors flex items-center gap-1">
+                  {actionLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+                  Delete
+                </button>
                 <button onClick={() => setSelectedIds(new Set())} className="ml-auto text-xs text-white/50 hover:text-white/80">Clear</button>
               </div>
             )}
@@ -477,53 +593,104 @@ function InventoryContent() {
                       {/* Quantity */}
                       <div className="md:col-span-1 md:text-center">
                         <span className="md:hidden text-[10px] text-stone-500 mr-1">Qty:</span>
-                        <span
-                          className={cn(
-                            "text-xs font-medium",
-                            item.quantity === 0
-                              ? "text-red-500"
-                              : item.quantity < 10
-                                ? "text-yellow-600"
-                                : "text-stone-900",
-                          )}
-                        >
-                          {item.quantity}
-                        </span>
-                        {item.quantity === 0 && (
-                          <AlertTriangle className="inline-block w-2.5 h-2.5 text-red-500 ml-0.5" />
+                        {editingItem === item.id ? (
+                          <input
+                            type="number"
+                            min="0"
+                            value={editQty}
+                            onChange={(e) => setEditQty(e.target.value)}
+                            className="w-14 h-6 text-xs text-center border border-stone-300 rounded bg-white focus:ring-1 focus:ring-stone-400"
+                          />
+                        ) : (
+                          <>
+                            <span
+                              className={cn(
+                                "text-xs font-medium",
+                                item.quantity === 0
+                                  ? "text-red-500"
+                                  : item.quantity < 10
+                                    ? "text-yellow-600"
+                                    : "text-stone-900",
+                              )}
+                            >
+                              {item.quantity}
+                            </span>
+                            {item.quantity === 0 && (
+                              <AlertTriangle className="inline-block w-2.5 h-2.5 text-red-500 ml-0.5" />
+                            )}
+                          </>
                         )}
                       </div>
 
                       {/* Price */}
                       <div className="md:col-span-2 md:text-right">
                         <span className="md:hidden text-[10px] text-stone-500 mr-1">Price:</span>
-                        {item.price > 0 ? (
-                          <span className="text-xs font-semibold text-stone-900">${item.price.toFixed(2)}</span>
+                        {editingItem === item.id ? (
+                          <div>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={editPrice}
+                              onChange={(e) => setEditPrice(e.target.value)}
+                              className="w-20 h-6 text-xs text-right border border-stone-300 rounded bg-white focus:ring-1 focus:ring-stone-400"
+                            />
+                            {feeEstimate?.asin === item.asin && (
+                              <div className="text-[10px] text-stone-500 mt-0.5">
+                                Fee: ${feeEstimate.totalFee.toFixed(2)}
+                              </div>
+                            )}
+                            <button
+                              onClick={() => handleGetFees(item.asin, parseFloat(editPrice) || item.price)}
+                              className="text-[10px] text-blue-600 hover:underline mt-0.5 flex items-center gap-0.5 justify-end"
+                            >
+                              <DollarSign className="w-2.5 h-2.5" />Est. fees
+                            </button>
+                          </div>
                         ) : (
-                          <span className="text-xs text-stone-400 italic">No price</span>
-                        )}
-                        {item.cost > 0 && (
-                          <div className="text-[10px] text-stone-500">Cost: ${item.cost.toFixed(2)}</div>
+                          <>
+                            {item.price > 0 ? (
+                              <span className="text-xs font-semibold text-stone-900">${item.price.toFixed(2)}</span>
+                            ) : (
+                              <span className="text-xs text-stone-400 italic">No price</span>
+                            )}
+                            {item.cost > 0 && (
+                              <div className="text-[10px] text-stone-500">Cost: ${item.cost.toFixed(2)}</div>
+                            )}
+                          </>
                         )}
                       </div>
 
-                      {/* Status */}
+                      {/* Status + Actions */}
                       <div className="md:col-span-2 md:text-right flex items-center justify-end gap-1.5">
-                        <span
-                          className={cn(
-                            "inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-full font-medium",
-                            item.status === "active" && "bg-emerald-100 text-emerald-700",
-                            item.status === "out_of_stock" && "bg-red-100 text-red-700",
-                            item.status === "inactive" && "bg-stone-100 text-stone-600",
-                          )}
-                        >
-                          {item.channel}
-                          <span className="opacity-50">•</span>
-                          {item.status.replace("_", " ")}
-                        </span>
-                        <button className="p-1 text-stone-300 hover:text-stone-600 hover:bg-stone-100 rounded transition-colors hidden md:block">
-                          <MoreHorizontal className="w-3.5 h-3.5" />
-                        </button>
+                        {editingItem === item.id ? (
+                          <div className="flex items-center gap-1">
+                            <button onClick={() => saveEdit(item)} disabled={editSaving} className="p-1 text-emerald-600 hover:bg-emerald-50 rounded transition-colors">
+                              {editSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                            </button>
+                            <button onClick={cancelEdit} className="p-1 text-stone-400 hover:bg-stone-100 rounded transition-colors">
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ) : (
+                          <>
+                            <span
+                              className={cn(
+                                "inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-full font-medium",
+                                item.status === "active" && "bg-emerald-100 text-emerald-700",
+                                item.status === "out_of_stock" && "bg-red-100 text-red-700",
+                                item.status === "inactive" && "bg-stone-100 text-stone-600",
+                              )}
+                            >
+                              {item.channel}
+                              <span className="opacity-50">•</span>
+                              {item.status.replace("_", " ")}
+                            </span>
+                            <button onClick={() => startEdit(item)} className="p-1 text-stone-300 hover:text-stone-600 hover:bg-stone-100 rounded transition-colors hidden md:block" title="Edit price & quantity">
+                              <Edit3 className="w-3.5 h-3.5" />
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
                   ))}
