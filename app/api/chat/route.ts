@@ -10,7 +10,7 @@ import { createClient } from "@/lib/supabase/server"
 import { z } from "zod"
 
 const google = createGoogleGenerativeAI({
-  apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY || "AIzaSyAN_niJmQCKK4sPtMJIFA-7t9_RWDuYCDM",
+  apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY,
 })
 
 export const maxDuration = 30
@@ -271,12 +271,19 @@ const tools = {
 }
 
 export async function POST(req: Request) {
+  if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+    return new Response(
+      JSON.stringify({ error: "Missing GOOGLE_GENERATIVE_AI_API_KEY environment variable. Add your Gemini API key to .env.local or your hosting provider's environment settings." }),
+      { status: 500, headers: { "Content-Type": "application/json" } }
+    )
+  }
+
   try {
     const body = await req.json()
     const messages: UIMessage[] = body.messages
 
     const result = streamText({
-      model: google("gemini-2.0-flash"),
+      model: google("gemini-2.5-flash-preview-05-20"),
       system: `You are Siml AI, an intelligent e-commerce assistant built into the Siml multi-channel listing platform. You help Amazon, eBay, and Shopify sellers manage their business.
 
 You have access to tools that look up REAL inventory, orders, listings, financial data, and channel connection status from the user's actual accounts.
