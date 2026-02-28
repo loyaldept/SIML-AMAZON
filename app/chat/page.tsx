@@ -1,10 +1,10 @@
 "use client"
 
-import React, { useRef, useEffect, useState } from "react"
+import React, { useRef, useEffect, useState, useCallback } from "react"
 import { useChat } from "@ai-sdk/react"
 import { DefaultChatTransport } from "ai"
 import Link from "next/link"
-import { ArrowUp, Loader2, Sparkles, Menu, Bell, Upload, FileText, ImageIcon, AlertCircle, Activity, Download, Package, ShieldCheck, DollarSign, BarChart3, Link2, ChevronDown, ScanSearch } from "lucide-react"
+import { ArrowUp, Loader2, Sparkles, Menu, Bell, Upload, FileText, ImageIcon, AlertCircle, Activity, Download, Package, ShieldCheck, DollarSign, BarChart3, Link2, ChevronDown, ScanSearch, Trash2, History } from "lucide-react"
 import { Sidebar } from "@/components/sidebar"
 import { MobileNav } from "@/components/mobile-nav"
 import { ChatMarkdown } from "@/components/chat-markdown"
@@ -18,18 +18,162 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
 
+const CHAT_HISTORY_KEY = "siml-chat-history"
+const MAX_HISTORY_SESSIONS = 20
+
+interface ChatSession {
+  id: string
+  title: string
+  timestamp: number
+  messages: any[]
+}
+
+function saveChatHistory(sessions: ChatSession[]) {
+  try {
+    localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(sessions.slice(0, MAX_HISTORY_SESSIONS)))
+  } catch {}
+}
+
+function loadChatHistory(): ChatSession[] {
+  try {
+    const data = localStorage.getItem(CHAT_HISTORY_KEY)
+    return data ? JSON.parse(data) : []
+  } catch {
+    return []
+  }
+}
+
+function generatePDF(markdownContent: string, title: string) {
+  // Use browser print to create a well-formatted PDF
+  const printWindow = window.open("", "_blank")
+  if (!printWindow) return
+
+  // Convert markdown to simple HTML
+  const htmlContent = markdownContent
+    .replace(/^### (.*$)/gm, '<h3 style="margin:12px 0 6px;font-size:14px;font-weight:600;color:#1c1917;">$1</h3>')
+    .replace(/^## (.*$)/gm, '<h2 style="margin:16px 0 8px;font-size:16px;font-weight:700;color:#1c1917;border-bottom:1px solid #e7e5e4;padding-bottom:6px;">$1</h2>')
+    .replace(/^# (.*$)/gm, '<h1 style="margin:20px 0 10px;font-size:20px;font-weight:700;color:#1c1917;border-bottom:2px solid #d6d3d1;padding-bottom:8px;">$1</h1>')
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.*?)\*/g, '<em>$1</em>')
+    .replace(/^- (.*$)/gm, '<li style="margin:2px 0;padding-left:4px;">$1</li>')
+    .replace(/^(\d+)\. (.*$)/gm, '<li style="margin:2px 0;padding-left:4px;">$2</li>')
+    .replace(/(<li.*<\/li>\n?)+/g, (match) => {
+      return `<ul style="margin:6px 0;padding-left:20px;list-style-type:disc;">${match}</ul>`
+    })
+    .replace(/^(?!<[hul])(.*$)/gm, (match) => {
+      if (match.trim() === "" || match.trim() === "---") return match
+      if (match.startsWith("<")) return match
+      return `<p style="margin:4px 0;line-height:1.6;color:#44403c;">${match}</p>`
+    })
+    .replace(/^---$/gm, '<hr style="margin:16px 0;border:none;border-top:1px solid #e7e5e4;">')
+
+  printWindow.document.write(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>${title}</title>
+      <style>
+        @media print {
+          body { margin: 0; }
+          @page { margin: 0.75in; }
+        }
+        body {
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+          max-width: 800px;
+          margin: 0 auto;
+          padding: 40px;
+          color: #1c1917;
+          font-size: 13px;
+          line-height: 1.6;
+        }
+        .header {
+          text-align: center;
+          margin-bottom: 30px;
+          padding-bottom: 20px;
+          border-bottom: 2px solid #292524;
+        }
+        .header h1 { font-size: 24px; margin: 0 0 8px; color: #292524; }
+        .header p { color: #78716c; font-size: 12px; margin: 0; }
+        .content { margin-top: 20px; }
+      </style>
+    </head>
+    <body>
+      <div class="header">
+        <h1>Siml Store Report</h1>
+        <p>Generated on ${new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" })} at ${new Date().toLocaleTimeString()}</p>
+      </div>
+      <div class="content">
+        ${htmlContent}
+      </div>
+    </body>
+    </html>
+  `)
+  printWindow.document.close()
+
+  // Wait for content to render then trigger print (which allows Save as PDF)
+  setTimeout(() => {
+    printWindow.print()
+  }, 500)
+}
+
 export default function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const [input, setInput] = useState("")
   const [chatError, setChatError] = useState("")
+  const [chatHistory, setChatHistory] = useState<ChatSession[]>([])
+  const [showHistory, setShowHistory] = useState(false)
+  const [currentSessionId] = useState(() => `session-${Date.now()}`)
 
-  const { messages, sendMessage, status, error } = useChat({
+  const { messages, sendMessage, status, error, setMessages } = useChat({
     transport: new DefaultChatTransport({ api: "/api/chat" }),
     onError: (err: Error) => {
       console.log("[Chat] Error:", err)
       setChatError(err.message || "Failed to get a response. Check your API key configuration.")
     },
   })
+
+  const getMessageParts = useCallback((msg: any) => {
+    if (!msg.parts || !Array.isArray(msg.parts)) {
+      return { text: msg.content || "", hasToolCalls: false, toolResults: [], toolCalls: [] }
+    }
+    const textParts = msg.parts.filter((p: any) => p.type === "text").map((p: any) => p.text).join("")
+    const toolCalls = msg.parts.filter((p: any) => p.type === "tool-invocation")
+    const hasToolCalls = toolCalls.length > 0
+    return { text: textParts, hasToolCalls, toolCalls }
+  }, [])
+
+  // Load chat history on mount
+  useEffect(() => {
+    setChatHistory(loadChatHistory())
+  }, [])
+
+  // Save current conversation to history when messages change
+  useEffect(() => {
+    if (messages.length === 0) return
+    const firstUserMsg = messages.find(m => m.role === "user")
+    const title = firstUserMsg
+      ? (getMessageParts(firstUserMsg).text || "Chat").slice(0, 60)
+      : "Chat"
+
+    const currentSession: ChatSession = {
+      id: currentSessionId,
+      title,
+      timestamp: Date.now(),
+      messages: messages.map(m => ({
+        id: m.id,
+        role: m.role,
+        content: getMessageParts(m).text || "",
+        parts: (m as any).parts,
+      })),
+    }
+
+    setChatHistory(prev => {
+      const filtered = prev.filter(s => s.id !== currentSessionId)
+      const updated = [currentSession, ...filtered].slice(0, MAX_HISTORY_SESSIONS)
+      saveChatHistory(updated)
+      return updated
+    })
+  }, [messages, currentSessionId, getMessageParts])
 
   // Show error from the hook
   useEffect(() => {
@@ -78,14 +222,14 @@ export default function ChatPage() {
       label: "Full Store Scan",
       description: "Comprehensive analysis of everything",
       icon: ScanSearch,
-      prompt: "Run a full store scan and analysis. Check my inventory health, find low stock alerts, identify problems, review account health indicators, check compliance issues, and give me a comprehensive report with actionable recommendations.",
+      prompt: "Run a full store scan. Give me a summary report of my store health, inventory status, sales performance, and top recommendations. Keep it concise with key metrics and actionable items.",
     },
     {
       id: "inventory",
       label: "Inventory Health",
       description: "Stock levels, low stock alerts, dead stock",
       icon: Package,
-      prompt: "Run an inventory health check. Analyze my stock levels, identify low stock items that need reordering, find dead stock or slow-moving products, and give me actionable inventory recommendations.",
+      prompt: "Run an inventory health check. Show me summary stats, low stock alerts, and reordering recommendations. Focus on items that need attention, not a full product list.",
     },
     {
       id: "account",
@@ -123,52 +267,39 @@ export default function ChatPage() {
     sendMessage({ text: prompt })
   }
 
-  const handleDownloadReport = () => {
-    const reportParts: string[] = []
-
-    for (const msg of messages) {
-      const { text } = getMessageParts(msg)
-      if (msg.role === "assistant" && text) {
-        reportParts.push(text)
-      }
-    }
-
-    if (reportParts.length === 0) return
-
+  const handleDownloadSingleReport = (text: string) => {
+    const title = `Siml Report - ${new Date().toISOString().slice(0, 10)}`
     const header = `# Siml Store Analysis Report\n\n**Generated:** ${new Date().toLocaleString()}\n\n---\n\n`
-    const content = header + reportParts.join("\n\n---\n\n")
-
-    const blob = new Blob([content], { type: "text/markdown" })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = `siml-report-${new Date().toISOString().slice(0, 10)}.md`
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
+    const content = header + text
+    generatePDF(content, title)
   }
 
   const suggestedPrompts = [
-    "How can I improve my profit margins?",
-    "What are my best selling products?",
-    "Help me optimize my inventory",
-    "How do I connect my Amazon Seller Account?",
+    "Which of my products are low on stock and need reordering?",
+    "Show me my top 5 best selling products this month",
+    "What can I do to reduce my cancellation rate?",
+    "What's my current account health status?",
   ]
 
-  const getMessageParts = (msg: any) => {
-    if (!msg.parts || !Array.isArray(msg.parts)) {
-      return { text: msg.content || "", hasToolCalls: false, toolResults: [] }
-    }
-    const textParts = msg.parts.filter((p: any) => p.type === "text").map((p: any) => p.text).join("")
-    const toolCalls = msg.parts.filter((p: any) => p.type === "tool-invocation")
-    const hasToolCalls = toolCalls.length > 0
-    return { text: textParts, hasToolCalls, toolCalls }
+  const loadHistorySession = (session: ChatSession) => {
+    setMessages(session.messages as any)
+    setShowHistory(false)
   }
 
-  const hasAssistantMessages = messages.some(
-    (msg) => msg.role === "assistant" && getMessageParts(msg).text
-  )
+  const deleteHistorySession = (sessionId: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    setChatHistory(prev => {
+      const updated = prev.filter(s => s.id !== sessionId)
+      saveChatHistory(updated)
+      return updated
+    })
+  }
+
+  const startNewChat = () => {
+    setMessages([])
+    setChatError("")
+    setShowHistory(false)
+  }
 
   return (
     <div className="h-screen flex overflow-hidden">
@@ -188,15 +319,27 @@ export default function ChatPage() {
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Download Report Button */}
-            {hasAssistantMessages && (
+            {/* Chat History Toggle */}
+            <button
+              onClick={() => setShowHistory(!showHistory)}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-all border",
+                showHistory
+                  ? "text-stone-900 bg-stone-200 border-stone-300"
+                  : "text-stone-600 bg-stone-100 hover:bg-stone-200 hover:text-stone-900 border-stone-200"
+              )}
+              title="Chat history"
+            >
+              <History className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">History</span>
+            </button>
+            {messages.length > 0 && (
               <button
-                onClick={handleDownloadReport}
-                className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium text-stone-600 bg-stone-100 hover:bg-stone-200 hover:text-stone-900 rounded-lg transition-all border border-stone-200"
-                title="Download report"
+                onClick={startNewChat}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-stone-600 bg-stone-100 hover:bg-stone-200 hover:text-stone-900 rounded-lg transition-all border border-stone-200"
+                title="New chat"
               >
-                <Download className="w-3.5 h-3.5" />
-                <span>Download Report</span>
+                <span>New Chat</span>
               </button>
             )}
             <Link href="/notifications" className="p-2 text-stone-400 hover:text-stone-700 hover:bg-stone-100 rounded-lg transition-colors relative">
@@ -204,6 +347,62 @@ export default function ChatPage() {
             </Link>
           </div>
         </header>
+
+        {/* Chat History Panel */}
+        {showHistory && (
+          <div className="absolute top-14 right-0 w-80 h-[calc(100%-3.5rem)] bg-white border-l border-stone-200 z-20 flex flex-col shadow-lg">
+            <div className="p-4 border-b border-stone-100 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-stone-900">Chat History</h3>
+              <button onClick={() => setShowHistory(false)} className="text-xs text-stone-400 hover:text-stone-600">Close</button>
+            </div>
+            <div className="flex-1 overflow-y-auto">
+              {chatHistory.length === 0 ? (
+                <div className="p-6 text-center">
+                  <History className="w-8 h-8 text-stone-300 mx-auto mb-2" />
+                  <p className="text-sm text-stone-500">No chat history yet</p>
+                  <p className="text-xs text-stone-400 mt-1">Your conversations will appear here</p>
+                </div>
+              ) : (
+                <div className="p-2 space-y-1">
+                  {chatHistory.map((session) => (
+                    <button
+                      key={session.id}
+                      onClick={() => loadHistorySession(session)}
+                      className={cn(
+                        "w-full text-left p-3 rounded-lg transition-all group",
+                        session.id === currentSessionId
+                          ? "bg-stone-100 border border-stone-200"
+                          : "hover:bg-stone-50"
+                      )}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium text-stone-900 truncate">{session.title}</p>
+                          <p className="text-[10px] text-stone-400 mt-0.5">
+                            {new Date(session.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                            {" "}
+                            {new Date(session.timestamp).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
+                            {" · "}
+                            {session.messages.length} messages
+                          </p>
+                        </div>
+                        {session.id !== currentSessionId && (
+                          <button
+                            onClick={(e) => deleteHistorySession(session.id, e)}
+                            className="opacity-0 group-hover:opacity-100 p-1 text-stone-400 hover:text-red-500 rounded transition-all"
+                            title="Delete"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Chat Messages */}
         <div className="flex-1 overflow-y-auto px-4 md:px-6 py-6 pb-48 md:pb-40">
@@ -322,6 +521,19 @@ export default function ChatPage() {
                         msg.role === "assistant"
                           ? <ChatMarkdown content={text} />
                           : <p className="text-sm leading-relaxed whitespace-pre-wrap">{text}</p>
+                      )}
+                      {/* Per-message download button for assistant messages with content */}
+                      {msg.role === "assistant" && text && text.length > 100 && (
+                        <div className="mt-3 pt-2 border-t border-stone-100 flex justify-end">
+                          <button
+                            onClick={() => handleDownloadSingleReport(text)}
+                            className="flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-medium text-stone-500 hover:text-stone-700 hover:bg-stone-50 rounded-md transition-all"
+                            title="Download this response as PDF"
+                          >
+                            <Download className="w-3 h-3" />
+                            Download PDF
+                          </button>
+                        </div>
                       )}
                     </div>
                   </div>
