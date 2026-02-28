@@ -260,6 +260,160 @@ const getFinancialSummaryTool = tool({
   },
 })
 
+const runStoreScanTool = tool({
+  description:
+    "Run a comprehensive store scan and analysis. Checks inventory health, stock alerts, account health indicators, compliance metrics, sales performance, and generates actionable recommendations. Use when the user asks to scan, analyze, or audit their store, or asks about store health, compliance, or wants a full report.",
+  inputSchema: z.object({}),
+  execute: async () => {
+    const supabase = await createClient()
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+    if (!user) return { error: "Not authenticated" }
+
+    // Fetch all data in parallel
+    const [channelsRes, inventoryRes, ordersRes, listingsRes] = await Promise.all([
+      supabase
+        .from("channel_connections")
+        .select("channel, status, store_name, seller_id")
+        .eq("user_id", user.id),
+      supabase.from("inventory").select("*").eq("user_id", user.id),
+      supabase.from("orders").select("*").eq("user_id", user.id),
+      supabase.from("listings").select("*").eq("user_id", user.id),
+    ])
+
+    const channels = channelsRes.data || []
+    const items = inventoryRes.data || []
+    const orders = ordersRes.data || []
+    const listings = listingsRes.data || []
+
+    const connectedChannels = channels.filter((c) => c.status === "connected")
+
+    // Inventory analysis
+    const totalItems = items.length
+    const totalUnits = items.reduce((sum, i) => sum + (i.quantity || 0), 0)
+    const totalValue = items.reduce(
+      (sum, i) => sum + (i.price || 0) * (i.quantity || 0),
+      0
+    )
+    const outOfStock = items.filter((i) => (i.quantity || 0) === 0)
+    const lowStock = items.filter(
+      (i) => (i.quantity || 0) > 0 && (i.quantity || 0) <= 5
+    )
+    const healthyStock = items.filter((i) => (i.quantity || 0) > 5)
+
+    // Order analysis
+    const totalOrders = orders.length
+    const totalRevenue = orders.reduce(
+      (sum, o) => sum + Number(o.total_amount || 0),
+      0
+    )
+    const avgOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0
+    const canceledOrders = orders.filter((o) => o.status === "Canceled")
+    const shippedOrders = orders.filter((o) => o.status === "Shipped")
+    const pendingOrders = orders.filter(
+      (o) => o.status === "Unshipped" || o.status === "Pending"
+    )
+    const fulfillmentRate =
+      totalOrders > 0 ? (shippedOrders.length / totalOrders) * 100 : 0
+    const cancelRate =
+      totalOrders > 0 ? (canceledOrders.length / totalOrders) * 100 : 0
+
+    // Listing analysis
+    const activeListings = listings.filter((l) => l.status === "active")
+    const errorListings = listings.filter((l) => l.status === "error")
+    const pendingListings = listings.filter((l) => l.status === "pending")
+
+    // Health indicators
+    const healthIndicators = {
+      account_health:
+        cancelRate <= 2.5 && fulfillmentRate >= 95
+          ? "Excellent"
+          : cancelRate <= 5 && fulfillmentRate >= 90
+            ? "Good"
+            : cancelRate <= 10 && fulfillmentRate >= 80
+              ? "Needs Attention"
+              : "At Risk",
+      inventory_health:
+        outOfStock.length === 0 && lowStock.length === 0
+          ? "Excellent"
+          : outOfStock.length === 0
+            ? "Good"
+            : outOfStock.length <= 3
+              ? "Needs Attention"
+              : "At Risk",
+      order_defect_rate: cancelRate,
+      fulfillment_rate: fulfillmentRate,
+      late_shipment_indicator: cancelRate > 4 ? "Warning" : "Normal",
+    }
+
+    // Compliance checks
+    const complianceIssues: string[] = []
+    if (cancelRate > 2.5) {
+      complianceIssues.push(
+        `Cancellation rate (${cancelRate.toFixed(1)}%) exceeds Amazon's 2.5% threshold`
+      )
+    }
+    if (fulfillmentRate < 95 && totalOrders > 0) {
+      complianceIssues.push(
+        `Fulfillment rate (${fulfillmentRate.toFixed(1)}%) is below the 95% target`
+      )
+    }
+    if (errorListings.length > 0) {
+      complianceIssues.push(
+        `${errorListings.length} listing(s) have errors that need to be resolved`
+      )
+    }
+
+    return {
+      scan_type: "comprehensive",
+      timestamp: new Date().toISOString(),
+      connected_channels: connectedChannels.map((c) => ({
+        channel: c.channel,
+        store_name: c.store_name,
+      })),
+      inventory_summary: {
+        total_skus: totalItems,
+        total_units: totalUnits,
+        estimated_value: Math.round(totalValue * 100) / 100,
+        out_of_stock_items: outOfStock.map((i) => ({
+          title: i.title,
+          sku: i.sku,
+          asin: i.asin,
+        })),
+        low_stock_items: lowStock.map((i) => ({
+          title: i.title,
+          sku: i.sku,
+          asin: i.asin,
+          quantity: i.quantity,
+        })),
+        healthy_items_count: healthyStock.length,
+      },
+      order_summary: {
+        total_orders: totalOrders,
+        total_revenue: Math.round(totalRevenue * 100) / 100,
+        avg_order_value: Math.round(avgOrderValue * 100) / 100,
+        shipped: shippedOrders.length,
+        pending: pendingOrders.length,
+        canceled: canceledOrders.length,
+      },
+      listing_summary: {
+        total_listings: listings.length,
+        active: activeListings.length,
+        pending: pendingListings.length,
+        errors: errorListings.length,
+        error_listings: errorListings.map((l) => ({
+          title: l.title,
+          sku: l.sku,
+          channel: l.channel,
+        })),
+      },
+      health_indicators: healthIndicators,
+      compliance_issues: complianceIssues,
+    }
+  },
+})
+
 // --- All tools ---
 const tools = {
   searchInventory: searchInventoryTool,
@@ -268,6 +422,7 @@ const tools = {
   getListings: getListingsTool,
   getChannelStatus: getChannelStatusTool,
   getFinancialSummary: getFinancialSummaryTool,
+  runStoreScan: runStoreScanTool,
 }
 
 export async function POST(req: Request) {
@@ -291,6 +446,16 @@ You have access to tools that look up REAL inventory, orders, listings, financia
 TWO-LANE ROUTING:
 1. GENERAL questions ("What is FBA?", "How to price books?", "Tips for Q4 sales") -> Answer directly from your knowledge. No tools needed.
 2. BUSINESS/INVENTORY questions ("Do we have SKU X?", "How many units?", "Show my orders", "What's my revenue?", "Am I connected to Amazon?") -> ALWAYS use the appropriate tool to look up real data, then present the results clearly.
+
+STORE SCAN & ANALYSIS:
+When the user asks to scan, analyze, or audit their store (or clicks "Scan & Analyze"), use the runStoreScan tool to get comprehensive data. Then present a detailed, well-structured report covering:
+- Account Health Status (with indicators)
+- Inventory Health (stock levels, alerts)
+- Sales Performance (revenue, orders, trends)
+- Compliance Issues (if any)
+- Actionable Recommendations
+
+Format the report clearly with sections, bullet points, and metrics. This report should be downloadable by the user, so make it comprehensive and well-organized.
 
 RULES:
 - Be concise, friendly, and actionable.
