@@ -4,9 +4,18 @@ import React, { useRef, useEffect, useState } from "react"
 import { useChat } from "@ai-sdk/react"
 import { DefaultChatTransport } from "ai"
 import Link from "next/link"
-import { ArrowUp, Loader2, Sparkles, Menu, Bell, Upload, FileText, ImageIcon, AlertCircle, Activity, Download } from "lucide-react"
+import { ArrowUp, Loader2, Sparkles, Menu, Bell, Upload, FileText, ImageIcon, AlertCircle, Activity, Download, Package, ShieldCheck, DollarSign, BarChart3, Link2, ChevronDown, ScanSearch } from "lucide-react"
 import { Sidebar } from "@/components/sidebar"
 import { MobileNav } from "@/components/mobile-nav"
+import { ChatMarkdown } from "@/components/chat-markdown"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
 
 export default function ChatPage() {
@@ -63,42 +72,77 @@ export default function ChatPage() {
     sendMessage({ text: prompt })
   }
 
-  const handleScanAndAnalyze = () => {
+  const scanOptions = [
+    {
+      id: "full",
+      label: "Full Store Scan",
+      description: "Comprehensive analysis of everything",
+      icon: ScanSearch,
+      prompt: "Run a full store scan and analysis. Check my inventory health, find low stock alerts, identify problems, review account health indicators, check compliance issues, and give me a comprehensive report with actionable recommendations.",
+    },
+    {
+      id: "inventory",
+      label: "Inventory Health",
+      description: "Stock levels, low stock alerts, dead stock",
+      icon: Package,
+      prompt: "Run an inventory health check. Analyze my stock levels, identify low stock items that need reordering, find dead stock or slow-moving products, and give me actionable inventory recommendations.",
+    },
+    {
+      id: "account",
+      label: "Account Health & Compliance",
+      description: "Policy violations, account risks",
+      icon: ShieldCheck,
+      prompt: "Check my account health and compliance status. Review for any policy violations, account risk indicators, listing compliance issues, and give me a report with steps to fix any problems.",
+    },
+    {
+      id: "financial",
+      label: "Financial Summary",
+      description: "Revenue, margins, fees breakdown",
+      icon: DollarSign,
+      prompt: "Give me a financial summary. Analyze my revenue, profit margins, fee breakdowns, and identify opportunities to improve my profitability with actionable recommendations.",
+    },
+    {
+      id: "listings",
+      label: "Listing Performance",
+      description: "Top/worst performers, optimization tips",
+      icon: BarChart3,
+      prompt: "Analyze my listing performance. Identify my top performing and worst performing products, check listing quality, and give me optimization recommendations to improve sales.",
+    },
+    {
+      id: "channels",
+      label: "Channel Status",
+      description: "Connection health across marketplaces",
+      icon: Link2,
+      prompt: "Check my channel connection status across all marketplaces. Report on which channels are connected, any sync issues, and recommendations for improving my multi-channel setup.",
+    },
+  ]
+
+  const handleScanOption = (prompt: string) => {
     if (isLoading) return
     setChatError("")
-    sendMessage({
-      text: "Run a full store scan and analysis. Check my inventory health, find low stock alerts, identify problems, review account health indicators, check compliance issues, and give me a comprehensive report with actionable recommendations.",
-    })
+    sendMessage({ text: prompt })
   }
 
   const handleDownloadReport = () => {
-    // Collect all assistant messages text
-    const reportLines: string[] = []
-    reportLines.push("SIML STORE ANALYSIS REPORT")
-    reportLines.push("=" .repeat(50))
-    reportLines.push(`Generated: ${new Date().toLocaleString()}`)
-    reportLines.push("")
+    const reportParts: string[] = []
 
     for (const msg of messages) {
       const { text } = getMessageParts(msg)
       if (msg.role === "assistant" && text) {
-        reportLines.push(text)
-        reportLines.push("")
-        reportLines.push("-".repeat(50))
-        reportLines.push("")
+        reportParts.push(text)
       }
     }
 
-    if (reportLines.length <= 4) {
-      // No content to download
-      return
-    }
+    if (reportParts.length === 0) return
 
-    const blob = new Blob([reportLines.join("\n")], { type: "text/plain" })
+    const header = `# Siml Store Analysis Report\n\n**Generated:** ${new Date().toLocaleString()}\n\n---\n\n`
+    const content = header + reportParts.join("\n\n---\n\n")
+
+    const blob = new Blob([content], { type: "text/markdown" })
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
     a.href = url
-    a.download = `siml-report-${new Date().toISOString().slice(0, 10)}.txt`
+    a.download = `siml-report-${new Date().toISOString().slice(0, 10)}.md`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -148,11 +192,11 @@ export default function ChatPage() {
             {hasAssistantMessages && (
               <button
                 onClick={handleDownloadReport}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-stone-500 hover:text-stone-900 hover:bg-stone-100 rounded-lg transition-colors"
+                className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium text-stone-600 bg-stone-100 hover:bg-stone-200 hover:text-stone-900 rounded-lg transition-all border border-stone-200"
                 title="Download report"
               >
                 <Download className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Download Report</span>
+                <span>Download Report</span>
               </button>
             )}
             <Link href="/notifications" className="p-2 text-stone-400 hover:text-stone-700 hover:bg-stone-100 rounded-lg transition-colors relative">
@@ -174,15 +218,40 @@ export default function ChatPage() {
                   Ask me anything about your inventory, sales analytics, pricing strategies, or e-commerce operations.
                 </p>
 
-                {/* Scan & Analyze Button */}
-                <button
-                  onClick={handleScanAndAnalyze}
-                  disabled={isLoading}
-                  className="mb-6 flex items-center gap-2.5 px-6 py-3 bg-stone-900 text-white rounded-xl text-sm font-medium hover:bg-stone-800 transition-all shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <Activity className="w-4 h-4" />
-                  Scan & Analyze My Store
-                </button>
+                {/* Scan & Analyze Dropdown */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      disabled={isLoading}
+                      className="mb-6 flex items-center gap-2.5 px-6 py-3 bg-stone-900 text-white rounded-xl text-sm font-medium hover:bg-stone-800 transition-all shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <Activity className="w-4 h-4" />
+                      Scan & Analyze My Store
+                      <ChevronDown className="w-3.5 h-3.5 ml-1 opacity-70" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="center" className="w-72 bg-white rounded-xl shadow-xl border border-stone-200 p-1.5">
+                    <DropdownMenuLabel className="px-3 py-2 text-xs font-semibold text-stone-400 uppercase tracking-wider">
+                      Choose scan type
+                    </DropdownMenuLabel>
+                    <DropdownMenuSeparator className="bg-stone-100" />
+                    {scanOptions.map((option) => (
+                      <DropdownMenuItem
+                        key={option.id}
+                        onClick={() => handleScanOption(option.prompt)}
+                        className="flex items-start gap-3 px-3 py-2.5 rounded-lg cursor-pointer hover:bg-stone-50 focus:bg-stone-50"
+                      >
+                        <div className="mt-0.5 w-8 h-8 rounded-lg bg-stone-100 flex items-center justify-center shrink-0">
+                          <option.icon className="w-4 h-4 text-stone-600" />
+                        </div>
+                        <div className="flex flex-col">
+                          <span className="text-sm font-medium text-stone-900">{option.label}</span>
+                          <span className="text-xs text-stone-500">{option.description}</span>
+                        </div>
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
 
                 {/* Suggested Prompts */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-lg">
@@ -249,7 +318,11 @@ export default function ChatPage() {
                           </div>
                         )
                       })}
-                      {text && <p className="text-sm leading-relaxed whitespace-pre-wrap">{text}</p>}
+                      {text && (
+                        msg.role === "assistant"
+                          ? <ChatMarkdown content={text} />
+                          : <p className="text-sm leading-relaxed whitespace-pre-wrap">{text}</p>
+                      )}
                     </div>
                   </div>
                 )
@@ -317,17 +390,37 @@ export default function ChatPage() {
                     <ImageIcon className="w-4 h-4" />
                   </button>
                   <div className="h-4 w-px bg-stone-200 mx-1" />
-                  {/* Scan & Analyze inline button */}
-                  <button
-                    type="button"
-                    onClick={handleScanAndAnalyze}
-                    disabled={isLoading}
-                    className="flex items-center gap-1 px-2 py-1 text-stone-400 hover:text-stone-900 hover:bg-stone-100 rounded-lg transition-colors disabled:opacity-50"
-                    title="Scan & Analyze Store"
-                  >
-                    <Activity className="w-3.5 h-3.5" />
-                    <span className="text-[10px] font-medium hidden sm:inline">Scan</span>
-                  </button>
+                  {/* Scan & Analyze inline dropdown */}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        type="button"
+                        disabled={isLoading}
+                        className="flex items-center gap-1 px-2 py-1 text-stone-400 hover:text-stone-900 hover:bg-stone-100 rounded-lg transition-colors disabled:opacity-50"
+                        title="Scan & Analyze Store"
+                      >
+                        <Activity className="w-3.5 h-3.5" />
+                        <span className="text-[10px] font-medium hidden sm:inline">Scan</span>
+                        <ChevronDown className="w-2.5 h-2.5 opacity-60" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" side="top" className="w-64 bg-white rounded-xl shadow-xl border border-stone-200 p-1.5 mb-2">
+                      <DropdownMenuLabel className="px-3 py-1.5 text-xs font-semibold text-stone-400 uppercase tracking-wider">
+                        Scan options
+                      </DropdownMenuLabel>
+                      <DropdownMenuSeparator className="bg-stone-100" />
+                      {scanOptions.map((option) => (
+                        <DropdownMenuItem
+                          key={option.id}
+                          onClick={() => handleScanOption(option.prompt)}
+                          className="flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer hover:bg-stone-50 focus:bg-stone-50"
+                        >
+                          <option.icon className="w-3.5 h-3.5 text-stone-500 shrink-0" />
+                          <span className="text-xs font-medium text-stone-700">{option.label}</span>
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                   <div className="h-4 w-px bg-stone-200 mx-1" />
                   <div className="flex items-center gap-1 px-1">
                     <Sparkles className="w-3 h-3 text-stone-400" />
