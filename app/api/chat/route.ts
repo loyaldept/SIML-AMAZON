@@ -438,7 +438,7 @@ export async function POST(req: Request) {
     const messages: UIMessage[] = body.messages
 
     const result = streamText({
-      model: google("gemini-2.5-flash-preview-05-20"),
+      model: google("gemini-2.5-flash"),
       system: `You are Siml AI, an intelligent e-commerce assistant built into the Siml multi-channel listing platform. You help Amazon, eBay, and Shopify sellers manage their business.
 
 You have access to tools that look up REAL inventory, orders, listings, financial data, and channel connection status from the user's actual accounts.
@@ -479,11 +479,13 @@ RULES:
 
     const errorText = errMsg.includes("API key")
       ? "Invalid or missing Gemini API key. Check your GOOGLE_GENERATIVE_AI_API_KEY environment variable."
-      : errMsg.includes("429") || errMsg.includes("rate")
-        ? "Rate limited by Gemini API. Please wait a moment and try again."
-        : errMsg.includes("quota")
-          ? "Gemini API quota exceeded. Check your Google Cloud billing."
-          : `Chat error: ${errMsg}`
+      : errMsg.includes("is not found for API version") || errMsg.includes("not supported for generateContent")
+        ? "The configured Gemini model is unavailable. Please check that the model name is valid and supported."
+        : errMsg.includes("429") || errMsg.includes("rate")
+          ? "Rate limited by Gemini API. Please wait a moment and try again."
+          : errMsg.includes("quota")
+            ? "Gemini API quota exceeded. Check your Google Cloud billing."
+            : `Chat error: ${errMsg}`
 
     return new Response(JSON.stringify({ error: errorText }), {
       status: 500,
