@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { createClient } from "@/lib/supabase/client"
-import { Check, ChevronRight, Sparkles, Package, BarChart3, Truck, Tag } from "lucide-react"
+import { Check, ChevronRight, Sparkles, Package, BarChart3, Truck, Tag, Link2, Clock, ExternalLink } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const steps = [
@@ -58,7 +58,36 @@ const steps = [
       { id: "repricing", label: "Smart Repricing", icon: Tag, desc: "Automated pricing rules" },
     ],
   },
+  {
+    id: 6,
+    title: "Connect your store",
+    subtitle: "Link your seller accounts to get started",
+  },
 ]
+
+const channelConfig: Record<string, { color: string; bgColor: string; borderColor: string; authPath: string; description: string }> = {
+  Amazon: {
+    color: "text-orange-700",
+    bgColor: "bg-orange-50",
+    borderColor: "border-orange-200",
+    authPath: "/api/amazon/auth",
+    description: "Connect your Amazon Seller Central account to sync inventory, orders, and analytics.",
+  },
+  eBay: {
+    color: "text-blue-700",
+    bgColor: "bg-blue-50",
+    borderColor: "border-blue-200",
+    authPath: "/api/ebay/auth",
+    description: "Connect your eBay seller account to manage listings and track sales.",
+  },
+  Shopify: {
+    color: "text-green-700",
+    bgColor: "bg-green-50",
+    borderColor: "border-green-200",
+    authPath: "/api/shopify/auth",
+    description: "Connect your Shopify store to sync products and orders.",
+  },
+}
 
 export default function OnboardingPage() {
   const router = useRouter()
@@ -74,6 +103,8 @@ export default function OnboardingPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [loadingProgress, setLoadingProgress] = useState(0)
   const [loadingMsg, setLoadingMsg] = useState("")
+  const [connectedChannels, setConnectedChannels] = useState<string[]>([])
+  const [connectingChannel, setConnectingChannel] = useState<string | null>(null)
 
   const step = steps[currentStep]
 
@@ -91,10 +122,30 @@ export default function OnboardingPage() {
     checkOnboarding()
   }, [router])
 
-  const handleFinish = async () => {
-    setIsLoading(true)
+  const saveProfileAndChannels = async () => {
     const supabase = createClient()
     const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return
+
+    await supabase.from("profiles").update({
+      business_name: businessName,
+      business_type: selections.size[0] || "starter",
+      onboarding_complete: true,
+    }).eq("id", user.id)
+
+    for (const ch of selections.channels) {
+      const status = connectedChannels.includes(ch) ? "connected" : "disconnected"
+      await supabase.from("channel_connections").upsert({
+        user_id: user.id,
+        channel: ch,
+        status,
+        credentials: {},
+      }, { onConflict: "user_id,channel" })
+    }
+  }
+
+  const handleFinish = async () => {
+    setIsLoading(true)
 
     const messages = [
       "Setting up your workspace...",
@@ -110,24 +161,39 @@ export default function OnboardingPage() {
       await new Promise((r) => setTimeout(r, 900))
     }
 
-    if (user) {
-      await supabase.from("profiles").update({
-        business_name: businessName,
-        business_type: selections.size[0] || "starter",
-        onboarding_complete: true,
-      }).eq("id", user.id)
+    await saveProfileAndChannels()
 
-      for (const ch of selections.channels) {
-        await supabase.from("channel_connections").upsert({
-          user_id: user.id,
-          channel: ch,
-          status: "disconnected",
-          credentials: {},
-        }, { onConflict: "user_id,channel" })
-      }
+    // If any channel was connected during onboarding, go to scanning page
+    if (connectedChannels.length > 0) {
+      router.push("/store-scan")
+    } else {
+      router.push("/dashboard")
+    }
+  }
+
+  const handleConnectChannel = (channel: string) => {
+    const config = channelConfig[channel]
+    if (!config) return
+
+    setConnectingChannel(channel)
+
+    // For Amazon, we use the existing OAuth flow
+    // Store onboarding state so we can return after auth
+    if (typeof window !== "undefined") {
+      sessionStorage.setItem("onboarding_return", "true")
+      sessionStorage.setItem("onboarding_state", JSON.stringify({
+        businessName,
+        selections,
+        connectedChannels,
+      }))
     }
 
-    router.push("/dashboard")
+    // Redirect to auth flow
+    window.location.href = config.authPath
+  }
+
+  const handleSetupLater = () => {
+    handleFinish()
   }
 
   const handleNext = () => {
@@ -135,6 +201,12 @@ export default function OnboardingPage() {
       handleFinish()
       return
     }
+
+    // If on step 4 (channels) and no channels selected, skip step 6 (connect)
+    if (currentStep === 3 && selections.channels.length === 0) {
+      // Skip to step 5 (features), then it will skip connect step
+    }
+
     setIsAnimating(true)
     setTimeout(() => {
       setCurrentStep((prev) => prev + 1)
@@ -161,8 +233,42 @@ export default function OnboardingPage() {
     if (currentStep === 2) return selections.size.length > 0
     if (currentStep === 3) return true
     if (currentStep === 4) return selections.features.length > 0
+    if (currentStep === 5) return true // Can always proceed from connect step
     return true
   }
+
+  // Restore state if returning from OAuth
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const shouldReturn = sessionStorage.getItem("onboarding_return")
+    if (shouldReturn) {
+      const savedState = sessionStorage.getItem("onboarding_state")
+      if (savedState) {
+        try {
+          const state = JSON.parse(savedState)
+          setBusinessName(state.businessName || "")
+          setSelections(state.selections || { categories: [], size: [], channels: [], features: [] })
+          setConnectedChannels(state.connectedChannels || [])
+        } catch {}
+      }
+      sessionStorage.removeItem("onboarding_return")
+      sessionStorage.removeItem("onboarding_state")
+      // Jump to the connect step
+      setCurrentStep(5)
+    }
+  }, [])
+
+  // Check URL params for successful connection callback
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const params = new URLSearchParams(window.location.search)
+    const connected = params.get("connected")
+    if (connected) {
+      setConnectedChannels((prev) => prev.includes(connected) ? prev : [...prev, connected])
+      // Clean up URL
+      window.history.replaceState({}, "", "/onboarding")
+    }
+  }, [])
 
   if (isLoading) {
     return (
@@ -222,6 +328,14 @@ export default function OnboardingPage() {
             <div className="flex justify-center mb-8">
               <div className="w-20 h-20 rounded-2xl bg-stone-100 flex items-center justify-center">
                 <Sparkles className="w-10 h-10 text-stone-600" />
+              </div>
+            </div>
+          )}
+
+          {currentStep === 5 && (
+            <div className="flex justify-center mb-8">
+              <div className="w-20 h-20 rounded-2xl bg-stone-100 flex items-center justify-center">
+                <Link2 className="w-10 h-10 text-stone-600" />
               </div>
             </div>
           )}
@@ -336,23 +450,135 @@ export default function OnboardingPage() {
               })}
             </div>
           )}
+
+          {/* Step 6: Connect Store */}
+          {currentStep === 5 && (
+            <div className="space-y-4">
+              {selections.channels.length === 0 ? (
+                <div className="text-center py-8">
+                  <p className="text-stone-500 text-sm mb-2">No channels selected in the previous step.</p>
+                  <p className="text-stone-400 text-xs">You can connect your stores later from Settings.</p>
+                </div>
+              ) : (
+                <>
+                  <p className="text-stone-500 text-center text-sm mb-6">
+                    Connect your accounts now to scan your store health, or set up later.
+                  </p>
+                  {selections.channels.map((channel) => {
+                    const config = channelConfig[channel]
+                    if (!config) return null
+                    const isConnected = connectedChannels.includes(channel)
+                    const isConnecting = connectingChannel === channel
+
+                    return (
+                      <div
+                        key={channel}
+                        className={cn(
+                          "p-5 rounded-xl border-2 transition-all",
+                          isConnected
+                            ? "border-emerald-300 bg-emerald-50"
+                            : `border-stone-200 ${config.bgColor}`
+                        )}
+                      >
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center gap-3">
+                            <span className={cn(
+                              "px-3 py-1 rounded-full text-xs font-semibold border",
+                              isConnected
+                                ? "bg-emerald-100 text-emerald-700 border-emerald-200"
+                                : `${config.bgColor} ${config.color} ${config.borderColor}`
+                            )}>
+                              {channel}
+                            </span>
+                            {isConnected && (
+                              <span className="flex items-center gap-1 text-xs text-emerald-600 font-medium">
+                                <Check className="w-3.5 h-3.5" />
+                                Connected
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <p className="text-xs text-stone-500 mb-4">{config.description}</p>
+
+                        {!isConnected && (
+                          <button
+                            onClick={() => handleConnectChannel(channel)}
+                            disabled={isConnecting}
+                            className={cn(
+                              "w-full h-10 rounded-lg text-sm font-medium flex items-center justify-center gap-2 transition-all",
+                              isConnecting
+                                ? "bg-stone-200 text-stone-400 cursor-wait"
+                                : "bg-stone-900 text-white hover:bg-stone-800"
+                            )}
+                          >
+                            {isConnecting ? (
+                              <>
+                                <div className="w-4 h-4 border-2 border-stone-400 border-t-transparent rounded-full animate-spin" />
+                                Connecting...
+                              </>
+                            ) : (
+                              <>
+                                <ExternalLink className="w-3.5 h-3.5" />
+                                Connect {channel}
+                              </>
+                            )}
+                          </button>
+                        )}
+                      </div>
+                    )
+                  })}
+                </>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="max-w-lg mx-auto w-full mt-8">
-          <button
-            onClick={handleNext}
-            disabled={!canProceed()}
-            className={cn(
-              "w-full h-12 rounded-xl text-sm font-medium flex items-center justify-center gap-1 transition-all",
-              canProceed()
-                ? "bg-stone-900 text-white hover:bg-stone-800"
-                : "bg-stone-200 text-stone-400 cursor-not-allowed"
-            )}
-          >
-            {currentStep === steps.length - 1 ? "Set Up My Workspace" : "Continue"}
-            {currentStep < steps.length - 1 && <ChevronRight className="w-4 h-4" />}
-            {currentStep === steps.length - 1 && <Sparkles className="w-4 h-4 ml-1" />}
-          </button>
+          {currentStep === 5 ? (
+            <div className="space-y-3">
+              <button
+                onClick={handleFinish}
+                className="w-full h-12 rounded-xl text-sm font-medium flex items-center justify-center gap-1 transition-all bg-stone-900 text-white hover:bg-stone-800"
+              >
+                {connectedChannels.length > 0 ? (
+                  <>
+                    Continue to Store Scan
+                    <Sparkles className="w-4 h-4 ml-1" />
+                  </>
+                ) : (
+                  <>
+                    Set Up My Workspace
+                    <Sparkles className="w-4 h-4 ml-1" />
+                  </>
+                )}
+              </button>
+              {connectedChannels.length === 0 && selections.channels.length > 0 && (
+                <button
+                  onClick={handleSetupLater}
+                  className="w-full h-10 rounded-xl text-sm font-medium flex items-center justify-center gap-1 text-stone-500 hover:text-stone-700 hover:bg-stone-100 transition-all"
+                >
+                  <Clock className="w-3.5 h-3.5" />
+                  Set up later
+                </button>
+              )}
+            </div>
+          ) : (
+            <button
+              onClick={handleNext}
+              disabled={!canProceed()}
+              className={cn(
+                "w-full h-12 rounded-xl text-sm font-medium flex items-center justify-center gap-1 transition-all",
+                canProceed()
+                  ? "bg-stone-900 text-white hover:bg-stone-800"
+                  : "bg-stone-200 text-stone-400 cursor-not-allowed"
+              )}
+            >
+              {currentStep === steps.length - 1 ? "Set Up My Workspace" : "Continue"}
+              {currentStep < steps.length - 1 && <ChevronRight className="w-4 h-4" />}
+              {currentStep === steps.length - 1 && <Sparkles className="w-4 h-4 ml-1" />}
+            </button>
+          )}
         </div>
       </main>
     </div>

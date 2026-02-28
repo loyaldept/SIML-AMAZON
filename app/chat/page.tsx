@@ -4,7 +4,7 @@ import React, { useRef, useEffect, useState } from "react"
 import { useChat } from "@ai-sdk/react"
 import { DefaultChatTransport } from "ai"
 import Link from "next/link"
-import { ArrowUp, Loader2, Sparkles, Menu, Bell, Upload, FileText, ImageIcon, AlertCircle } from "lucide-react"
+import { ArrowUp, Loader2, Sparkles, Menu, Bell, Upload, FileText, ImageIcon, AlertCircle, Activity, Download } from "lucide-react"
 import { Sidebar } from "@/components/sidebar"
 import { MobileNav } from "@/components/mobile-nav"
 import { cn } from "@/lib/utils"
@@ -63,6 +63,48 @@ export default function ChatPage() {
     sendMessage({ text: prompt })
   }
 
+  const handleScanAndAnalyze = () => {
+    if (isLoading) return
+    setChatError("")
+    sendMessage({
+      text: "Run a full store scan and analysis. Check my inventory health, find low stock alerts, identify problems, review account health indicators, check compliance issues, and give me a comprehensive report with actionable recommendations.",
+    })
+  }
+
+  const handleDownloadReport = () => {
+    // Collect all assistant messages text
+    const reportLines: string[] = []
+    reportLines.push("SIML STORE ANALYSIS REPORT")
+    reportLines.push("=" .repeat(50))
+    reportLines.push(`Generated: ${new Date().toLocaleString()}`)
+    reportLines.push("")
+
+    for (const msg of messages) {
+      const { text } = getMessageParts(msg)
+      if (msg.role === "assistant" && text) {
+        reportLines.push(text)
+        reportLines.push("")
+        reportLines.push("-".repeat(50))
+        reportLines.push("")
+      }
+    }
+
+    if (reportLines.length <= 4) {
+      // No content to download
+      return
+    }
+
+    const blob = new Blob([reportLines.join("\n")], { type: "text/plain" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `siml-report-${new Date().toISOString().slice(0, 10)}.txt`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
   const suggestedPrompts = [
     "How can I improve my profit margins?",
     "What are my best selling products?",
@@ -79,6 +121,10 @@ export default function ChatPage() {
     const hasToolCalls = toolCalls.length > 0
     return { text: textParts, hasToolCalls, toolCalls }
   }
+
+  const hasAssistantMessages = messages.some(
+    (msg) => msg.role === "assistant" && getMessageParts(msg).text
+  )
 
   return (
     <div className="h-screen flex overflow-hidden">
@@ -97,9 +143,22 @@ export default function ChatPage() {
             </div>
           </div>
 
-          <Link href="/notifications" className="p-2 text-stone-400 hover:text-stone-700 hover:bg-stone-100 rounded-lg transition-colors relative">
-            <Bell className="w-4 h-4" />
-          </Link>
+          <div className="flex items-center gap-2">
+            {/* Download Report Button */}
+            {hasAssistantMessages && (
+              <button
+                onClick={handleDownloadReport}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-stone-500 hover:text-stone-900 hover:bg-stone-100 rounded-lg transition-colors"
+                title="Download report"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Download Report</span>
+              </button>
+            )}
+            <Link href="/notifications" className="p-2 text-stone-400 hover:text-stone-700 hover:bg-stone-100 rounded-lg transition-colors relative">
+              <Bell className="w-4 h-4" />
+            </Link>
+          </div>
         </header>
 
         {/* Chat Messages */}
@@ -114,6 +173,16 @@ export default function ChatPage() {
                 <p className="text-stone-500 mb-8 max-w-md">
                   Ask me anything about your inventory, sales analytics, pricing strategies, or e-commerce operations.
                 </p>
+
+                {/* Scan & Analyze Button */}
+                <button
+                  onClick={handleScanAndAnalyze}
+                  disabled={isLoading}
+                  className="mb-6 flex items-center gap-2.5 px-6 py-3 bg-stone-900 text-white rounded-xl text-sm font-medium hover:bg-stone-800 transition-all shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Activity className="w-4 h-4" />
+                  Scan & Analyze My Store
+                </button>
 
                 {/* Suggested Prompts */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-lg">
@@ -166,6 +235,7 @@ export default function ChatPage() {
                           getListings: "Checking listings",
                           getChannelStatus: "Checking channel status",
                           getFinancialSummary: "Getting financial data",
+                          runStoreScan: "Running full store scan",
                         }
                         if (state === "result" && text) return null // Don't show if we have text
                         return (
@@ -245,6 +315,18 @@ export default function ChatPage() {
                   </button>
                   <button type="button" className="p-1.5 text-stone-400 hover:text-stone-600 hover:bg-stone-100 rounded-lg transition-colors" title="Upload image">
                     <ImageIcon className="w-4 h-4" />
+                  </button>
+                  <div className="h-4 w-px bg-stone-200 mx-1" />
+                  {/* Scan & Analyze inline button */}
+                  <button
+                    type="button"
+                    onClick={handleScanAndAnalyze}
+                    disabled={isLoading}
+                    className="flex items-center gap-1 px-2 py-1 text-stone-400 hover:text-stone-900 hover:bg-stone-100 rounded-lg transition-colors disabled:opacity-50"
+                    title="Scan & Analyze Store"
+                  >
+                    <Activity className="w-3.5 h-3.5" />
+                    <span className="text-[10px] font-medium hidden sm:inline">Scan</span>
                   </button>
                   <div className="h-4 w-px bg-stone-200 mx-1" />
                   <div className="flex items-center gap-1 px-1">
